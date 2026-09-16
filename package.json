@@ -1,0 +1,24 @@
+{
+  "name": "dsh-skill-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH dynamic Cordis plugin: list every resolved skill in Settings, toggle each one on or off, and read the shared ~/.agents/skills repository live.",
+  "type": "module",
+  "license": "MIT",
+  "author": "forestbiankiii",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "skills",
+    "agent-skills"
+  ],
+  "scripts": {
+    "build": "node tools/build-payload.mjs --json > payload/code.json && node tools/build-payload.mjs > payload/bundle.txt",
+    "check": "node --check src/host/host.js && node --check src/client/client.js && node --check tools/build-payload.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

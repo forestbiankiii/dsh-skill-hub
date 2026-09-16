@@ -1,0 +1,9 @@
+# Build and package noise
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local scratch
+.tmp/
+tmp/

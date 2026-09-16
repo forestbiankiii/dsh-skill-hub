@@ -1,0 +1,10 @@
+# Sources are authored with LF; keep them that way on every platform so the
+# payloads built here match the bytes committed here.
+* text=auto eol=lf
+
+# Windows batch/PowerShell helpers, if any are ever added, stay CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Generated payloads are compared byte-for-byte by tools/verify-payload.mjs.
+payload/* -text

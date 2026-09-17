@@ -40,18 +40,38 @@ DSH 的技能注册表本身没有「禁用」概念，`dsh-tool-skill` 通过 `
 
 ```
 dsh-skill-hub/
-├── src/
-│   ├── host/host.js        # 宿主半边：技能包装 + 仓库提供方 + 面板 RPC
-│   └── client/client.js    # 浏览器半边：设置页 / 快捷入口 / 运行卡片 UI
+├── src/                        # 参考实现（完整注释、可读优先）
+│   ├── host/host.js            # 宿主半边：技能包装 + 仓库提供方 + 面板 RPC
+│   └── client/client.js        # 浏览器半边：设置页 / 快捷入口 / 运行卡片 UI
+├── deploy/                     # 部署副本（行为相同，去掉散文注释，载荷可手粘）
+│   ├── compact.host.js
+│   └── compact.client.js
 ├── tools/
-│   └── build-payload.mjs   # 把 src/ 转成 cordis_define 需要的函数体字符串
-├── payload/
-│   ├── host.txt            # 构建产物（直接粘进 code.host）
-│   ├── client.txt          # 构建产物（直接粘进 code.client）
-│   └── code.json           # {"host": "...", "client": "..."}
+│   ├── payload.mjs             # 源码 → 沙箱函数体的转换，只此一处
+│   ├── build-payload.mjs       # 生成 / 刷新 / 校验 payload/
+│   └── verify-payload.mjs      # 编译 + 桩环境断言两者
+├── payload/                    # 构建产物，与源码逐字对应
+│   ├── host.txt                # 参考版宿主载荷
+│   ├── client.txt              # 参考版客户端载荷
+│   ├── code.json               # {"host": "...", "client": "..."}
+│   ├── compact.host.txt        # 紧凑版宿主载荷 ← 实际部署用的就是它
+│   ├── compact.client.txt
+│   └── compact.json
 ├── LICENSE
 └── README.md
 ```
+
+### 两份源码的关系
+
+`src/` 是参考实现，写给读代码的人；`deploy/` 是它的紧凑副本，写给
+`cordis_define` 的输入框。两者行为一致，差别只在载荷里带多少注释——沙箱没有
+文件系统访问，宿主半边无法从磁盘读源码，所以**要跑起来的那份文字必须完整地出现在
+调用参数里**，短就是硬指标。
+
+`payload/` 是两者各自的构建产物。`--check` 会重新构建并与提交的文件逐字节比对，
+所以「仓库里的代码」和「真正跑起来的代码」不会各自漂移：改了 `deploy/` 却忘记重新
+构建，校验会直接失败。
+
 
 ---
 
@@ -60,17 +80,40 @@ dsh-skill-hub/
 这个插件以 **dynamic Cordis Package** 的形式运行：代码由 `cordis_define` 定义、
 `cordis_run` 激活，只存在于当前 DSH 进程里，重启即消失。它不写入任何仓库配置。
 
-1. 构建载荷：
+1. 取载荷。手动部署请用**紧凑版**，它更短、更好粘：
 
-   ```bash
-   node tools/build-payload.mjs --json > payload/code.json
+   ```
+   payload/compact.host.txt    → cordis_define 的 code.host
+   payload/compact.client.txt  → cordis_define 的 code.client
    ```
 
-2. 在 DSH 会话里让模型调用 `cordis_define`，把 `payload/host.txt` 的内容放进
-   `code.host`、`payload/client.txt` 的内容放进 `code.client`。
+   也可以直接用 `payload/compact.json`（`code.host` / `code.client` 的现成配对），
+   或先重新生成：
+
+   ```bash
+   node tools/build-payload.mjs --compact --json   # 紧凑版，供粘贴
+   node tools/build-payload.mjs --json             # 参考版，带完整注释
+   ```
+
+2. 在 DSH 会话里让模型调用 `cordis_define`，把两个载荷分别放进 `code.host` 与
+   `code.client`。
 
 3. `cordis_run` 激活返回的 `pluginId` / `packageId`。带浏览器半边的包首次运行需要
    在界面上授权。
+
+### 想改代码
+
+改 `deploy/`（部署副本）或 `src/`（参考实现），然后：
+
+```bash
+node tools/build-payload.mjs --write   # 刷新 payload/
+node tools/build-payload.mjs --check   # 应输出 payloads are current
+node tools/verify-payload.mjs          # 编译两版并断言注册项
+```
+
+宿主半边的 `REPO` 常量是技能仓库根目录。运行时**不要**用 `--write` 之外的编辑器直接
+改 `payload/` 里的文件，否则 `--check` 会失败——这是故意的。
+
 
 ### 自定义技能仓库路径
 
@@ -96,20 +139,26 @@ DSH 默认就把 `~/.agents/skills` 当作 `user-agents` 技能根，`skill-file
 ## 开发 / Develop
 
 ```bash
-node --check src/host/host.js      # 语法检查
-node --check src/client/client.js  # 客户端代码不经打包器，需自带 React.createElement
-node tools/build-payload.mjs       # 人类可读的载荷
-node tools/build-payload.mjs --json  # 供 cordis_define 使用
+npm run check      # 语法检查两侧源码与全部工具脚本
+npm test           # 编译两版载荷、校验提交字节、断言注册项
+npm run payload    # 重新生成 payload/
 ```
 
 两边都是**纯 JavaScript 函数体**，没有 TypeScript、JSX、`import` 或打包步骤。
 客户端只能用沙箱提供的 `React`、`host.call`、`styles.insert` 与 `ctx.get`；
 宿主半边只能用 `ctx`（`inject` 声明过的服务）、`harness`、`console` 与编码内建。
 
+字符串审计会拒绝载荷里出现 `<` 与反引号：载荷最终会以字符串形式进入会话日志，
+一个字面量的闭合脚本标签足以破坏它，而且这种错误只在回放时才暴露。中文文案里的全角
+括号是为此保留的写法，不是笔误。
+
 ### 已知边界
 
 - 关闭状态只存在于当前进程内，DSH 重启后全部恢复为开启。
-- 禁用面板的存在与否，只影响已经发布的技能目录；正在进行的步骤不会被打断。
+- 面板只会影响**尚未发布**的技能目录；正在进行的步骤不会被打断。
+- 沙箱宿主半边读不到本机文件，因此插件无法从磁盘加载自身源码——想缩短载荷，改
+  `deploy/`，不要指望运行时读取。
+
 
 ---
 

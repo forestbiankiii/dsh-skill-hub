@@ -1,0 +1,300 @@
+/**
+ * dsh-skill-hub — compact host half (deployment copy).
+ *
+ * Behaviourally the same package as `src/host/host.js`, with the prose comments
+ * dropped and the frontmatter parser flattened into local helpers, so the built
+ * payload stays small enough to paste into a `cordis_define` call by hand.
+ *
+ * `payload/compact.host.txt` is this file's built payload; the deployment
+ * section of the README explains which copy to prefer.
+ */
+
+/** The shared skill repository every agent on this machine reads. */
+const REPO = 'C:\\Users\\17196\\.agents\\skills'
+
+/** Kebab-case, exactly as the registry validates skill names. */
+const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+const inject = ['skills', 'timer']
+
+/**
+ * @param {object} ctx - the guarded Cordis context a host half receives.
+ */
+export function apply(ctx) {
+  const skills = ctx.skills
+  const fs = ctx.get('fs')
+  const disabled = new Set()
+  let defs = new Map()
+  let problems = []
+  let sig
+  let pending
+  let invalidateProvider = function () {}
+
+  const plain = function (value) { return typeof value === 'string' ? value : '' }
+
+  const unquote = function (value) {
+    const text = plain(value).trim()
+    if (text.length >= 2) {
+      const a = text.charAt(0)
+      const b = text.charAt(text.length - 1)
+      if ((a === '"' && b === '"') || (a === "'" && b === "'")) return text.slice(1, text.length - 1)
+    }
+    return text
+  }
+
+  /**
+   * A flat `key: value` frontmatter reader. Returns null for anything DSH
+   * itself would refuse, so a rejected entry never half-registers.
+   */
+  const parse = function (raw) {
+    let text = raw
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
+    if (text.slice(0, 3) !== '---') return null
+    const brk = text.indexOf('\n')
+    if (brk < 0) return null
+    const lines = text.slice(brk + 1).split('\n')
+    const data = {}
+    const body = []
+    let closed = false
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i].replace(/\r$/, '')
+      if (closed) { body.push(line); continue }
+      if (line.trim() === '---') { closed = true; continue }
+      if (/^\s/.test(line)) continue
+      const colon = line.indexOf(':')
+      if (colon <= 0) continue
+      const key = line.slice(0, colon).trim()
+      const value = line.slice(colon + 1).trim()
+      if (key !== '' && value !== '') data[key] = value
+    }
+    if (!closed) return null
+    const name = unquote(data.name)
+    const description = unquote(data.description)
+    if (name === '' || description === '' || !NAME.test(name)) return null
+    const flag = function (key) {
+      if (data[key] === undefined) return true
+      return unquote(data[key]).toLowerCase() !== 'false'
+    }
+    const when = data.whenToUse !== undefined ? data.whenToUse : data['when-to-use']
+    const out = {
+      name: name,
+      description: description,
+      modelInvocable: flag('modelInvocable'),
+      userInvocable: flag('userInvocable'),
+      content: body.join('\n').trim(),
+    }
+    if (when !== undefined && when !== '') out.whenToUse = unquote(when)
+    return out
+  }
+
+  const entries = async function (target) {
+    try {
+      const list = await fs.listDir(target)
+      return Array.isArray(list) ? list : []
+    } catch (error) {
+      return []
+    }
+  }
+
+  /**
+   * Re-read the repository when its `name:version` signature moved. Versions
+   * come from the listing, so an unchanged repository reads no files.
+   */
+  const scan = async function () {
+    const root = await fs.resolve(REPO)
+    const top = await entries(root)
+    const files = []
+    const marks = []
+    for (let i = 0; i < top.length; i += 1) {
+      const item = top[i]
+      if (typeof item.name !== 'string' || item.target === undefined) continue
+      if (item.type === 'directory') {
+        const inner = await entries(item.target)
+        for (let j = 0; j < inner.length; j += 1) {
+          if (inner[j].type === 'file' && inner[j].name === 'SKILL.md' && inner[j].target !== undefined) {
+            files.push({ label: item.name, target: inner[j].target })
+            marks.push(item.name + ':' + String(inner[j].version))
+          }
+        }
+      } else if (item.type === 'file' && item.name.toLowerCase().endsWith('.md')) {
+        files.push({ label: item.name, target: item.target })
+        marks.push(item.name + ':' + String(item.version))
+      }
+    }
+    const next = marks.join('|')
+    if (next === sig) return false
+    const found = new Map()
+    const bad = []
+    for (let i = 0; i < files.length; i += 1) {
+      let raw
+      try {
+        raw = await fs.readText(files[i].target)
+      } catch (error) {
+        bad.push({ name: files[i].label, reason: 'read failed' })
+        continue
+      }
+      const skill = parse(raw)
+      if (skill === null) { bad.push({ name: files[i].label, reason: 'skipped' }); continue }
+      if (found.has(skill.name)) { bad.push({ name: skill.name, reason: 'duplicate' }); continue }
+      found.set(skill.name, skill)
+    }
+    defs = found
+    problems = bad
+    sig = next
+    return true
+  }
+
+  const ensure = function (force) {
+    if (force === true) sig = undefined
+    if (pending !== undefined) return pending
+    pending = scan().then(function (moved) {
+      pending = undefined
+      if (moved === true) invalidateProvider()
+    }, function () { pending = undefined })
+    return pending
+  }
+
+  const asSkill = function (definition) {
+    const skill = {
+      name: definition.name,
+      description: definition.description,
+      invocation: { modelInvocable: definition.modelInvocable, userInvocable: definition.userInvocable },
+      source: 'user-agents',
+      provider: 'agents-repo',
+      resourceBase: { kind: 'directory', path: REPO },
+    }
+    if (definition.whenToUse !== undefined) skill.whenToUse = definition.whenToUse
+    return skill
+  }
+
+  const snapshot = skills.snapshot.bind(skills)
+  const get = skills.get.bind(skills)
+  const kick = function () {
+    if (typeof skills.invalidateCache === 'function') skills.invalidateCache()
+  }
+
+  skills.snapshot = async function (options) {
+    const snap = await snapshot(options)
+    return {
+      skills: (snap.skills || []).filter(function (skill) { return !disabled.has(skill.name) }),
+      complete: snap.complete,
+    }
+  }
+  skills.list = async function (options) { return (await skills.snapshot(options)).skills }
+  skills.get = async function (name, options) {
+    if (disabled.has(name)) return undefined
+    return get(name, options)
+  }
+
+  ctx.effect(function () {
+    return function () {
+      skills.snapshot = snapshot
+      skills.list = async function (options) { return (await snapshot(options)).skills }
+      skills.get = get
+      kick()
+    }
+  }, 'skillhub restore')
+
+  if (fs === undefined) {
+    console.error('no filesystem service; the shared skill repository is skipped')
+  } else {
+    ctx.skills.registerProvider(function (control) {
+      invalidateProvider = function () { control.invalidate() }
+      return {
+        name: 'agents-repo',
+        list: async function () {
+          await ensure(false)
+          const out = []
+          defs.forEach(function (definition) {
+            const skill = asSkill(definition)
+            skill.rank = 450
+            skill.locator = definition.name
+            out.push(skill)
+          })
+          return out
+        },
+        get: async function (candidate) {
+          const definition = defs.get(candidate.name)
+          if (definition === undefined) return undefined
+          const skill = asSkill(definition)
+          skill.content = definition.content
+          return skill
+        },
+      }
+    })
+    ctx.effect(function () {
+      return ctx.interval(function () { ensure(false) }, 8000)
+    }, 'skillhub poll')
+  }
+
+  /** The panel's view, read through the un-wrapped snapshot. */
+  const catalog = async function () {
+    const rows = []
+    const seen = new Set()
+    try {
+      const snap = await snapshot({})
+      const list = snap.skills || []
+      for (let i = 0; i < list.length; i += 1) {
+        const skill = list[i]
+        const name = plain(skill.name)
+        if (name === '' || seen.has(name)) continue
+        seen.add(name)
+        rows.push({
+          name: name,
+          description: plain(skill.description),
+          whenToUse: plain(skill.whenToUse),
+          provider: plain(skill.provider),
+          enabled: !disabled.has(name),
+        })
+      }
+    } catch (error) {
+      console.error('catalog read failed', error)
+    }
+    rows.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0 })
+    return rows
+  }
+
+  const flip = function (names, enabled) {
+    for (let i = 0; i < names.length; i += 1) {
+      const name = names[i]
+      if (typeof name !== 'string' || name === '') continue
+      if (enabled) disabled.delete(name)
+      else disabled.add(name)
+    }
+    kick()
+  }
+
+  harness.handle('skillhub:state', async function (args) {
+    const request = args === undefined ? {} : args
+    if (request.rescan === true && fs !== undefined) await ensure(true)
+    const rows = await catalog()
+    const repo = []
+    defs.forEach(function (definition) {
+      repo.push({ name: definition.name, description: definition.description })
+    })
+    const skipped = []
+    for (let i = 0; i < problems.length; i += 1) {
+      skipped.push({ name: problems[i].name, reason: problems[i].reason })
+    }
+    return {
+      skills: rows,
+      repo: { path: REPO, loaded: repo.length, skills: repo, skipped: skipped, available: fs !== undefined },
+    }
+  })
+
+  harness.handle('skillhub:toggle', async function (args) {
+    const request = args === undefined ? {} : args
+    flip(Array.isArray(request.names) ? request.names : [], request.enabled !== false)
+    return { ok: true }
+  })
+
+  harness.handle('skillhub:toggle-all', async function (args) {
+    const request = args === undefined ? {} : args
+    const all = await catalog()
+    const names = all.map(function (row) { return row.name })
+    disabled.clear()
+    if (request.enabled === false) flip(names, false)
+    else kick()
+    return { ok: true }
+  })
+}

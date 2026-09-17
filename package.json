@@ -15,8 +15,10 @@
     "agent-skills"
   ],
   "scripts": {
-    "build": "node tools/build-payload.mjs --json > payload/code.json && node tools/build-payload.mjs > payload/bundle.txt",
-    "check": "node --check src/host/host.js && node --check src/client/client.js && node --check tools/build-payload.mjs"
+    "check": "node --check src/host/host.js && node --check src/client/client.js && node --check deploy/compact.host.js && node --check deploy/compact.client.js && node --check tools/payload.mjs && node --check tools/build-payload.mjs && node --check tools/verify-payload.mjs",
+    "test": "node tools/build-payload.mjs --check && node tools/verify-payload.mjs",
+    "payload": "node tools/build-payload.mjs --write",
+    "payload:compact": "node tools/build-payload.mjs --compact --json"
   },
   "engines": {
     "node": ">=20"

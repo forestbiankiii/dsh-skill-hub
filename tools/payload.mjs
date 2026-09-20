@@ -83,3 +83,22 @@ export function demo() {
     client: payload('deploy/demo.client.js', 'apply', false),
   }
 }
+
+/**
+ * The minified deployment copy under `deploy/min/`.
+ *
+ * Same behaviour as {@link demo} with comments and indentation stripped, written
+ * by `node tools/build-min.mjs`. It exists because the text that actually runs
+ * in a dynamic Package has to be reproduced by hand: the annotated source is
+ * long enough that a copy of it cannot be checked by eye, while the minified
+ * form can be read back line for line and compared.
+ *
+ * `src/` and `deploy/compact` stay readable — they are the reference copies, and
+ * `--check` guards them either way.
+ */
+export function deployed() {
+  return {
+    host: payload('deploy/min/demo.host.min.js', 'apply', true),
+    client: payload('deploy/min/demo.client.min.js', 'apply', false),
+  }
+}

@@ -1,15 +1,19 @@
 /**
  * dsh-skill-hub — demo host half.
  *
- * A deliberately minimal build of the same package, small enough that the whole
- * built payload can be read back and re-submitted without truncation. Full
- * commentary, repository diagnostics and the polling scan live in
- * `src/host/host.js`; this file keeps only what the switches themselves need.
+ * Two things this build adds over a flat list:
  *
- * The repository path is a user setting, not a constant: it resolves through
- * `ctx.settings` and persists to the DSH settings document, so the panel can
- * repoint the plugin without editing code. The default is home-relative rather
- * than an absolute path, so another machine gets its own `~/.agents/skills`.
+ *   1. the disable set is PER WORKSPACE. A session resolves to the workspace
+ *      that owns its directory, and only that workspace's set applies; a
+ *      session with no workspace falls back to the global set. That is what
+ *      makes "research workspace sees research skills, coding workspace sees
+ *      coding skills" work.
+ *   2. every skill carries its upstream source, read from the shared
+ *      repository's `.skill-lock.json` — the GitHub repo it was installed from,
+ *      or a plain statement of why it has none.
+ *
+ * The repository path is a user setting too: it resolves through `ctx.settings`
+ * and persists to the DSH settings document.
  */
 
 /** Used when the settings document carries no override. */
@@ -18,10 +22,14 @@ const DEFAULT_REPO = '~/.agents/skills'
 /** The namespace this plugin owns in the DSH settings document. */
 const SETTINGS_NS = 'skill-hub'
 
+/** The repository's install ledger: skill name → where it came from. */
+const LOCK_NAME = '.skill-lock.json'
+
 /** Kebab-case, exactly as the registry validates skill names. */
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 const inject = ['skills', 'settings', 'timer']
+
 /**
  * A schemastery-shaped schema, built by hand.
  *
@@ -31,15 +39,34 @@ const inject = ['skills', 'settings', 'timer']
  * `toJSON()` for the configuration descriptor, and it must describe its
  * container shape (`type` plus `dict`) for secret redaction. That is the whole
  * contract this object satisfies.
- *
- * @param {object} defaults - the schema's default values.
- * @returns {Function} the callable schema.
  */
 function makeSchema(defaults) {
+  const asList = function (value) {
+    const out = []
+    if (!Array.isArray(value)) return out
+    for (let i = 0; i < value.length; i += 1) {
+      if (typeof value[i] === 'string' && value[i] !== '') out.push(value[i])
+    }
+    return out
+  }
+  const asWorkspaces = function (value) {
+    const out = {}
+    const raw = value !== null && typeof value === 'object' ? value : {}
+    const keys = Object.keys(raw)
+    for (let i = 0; i < keys.length; i += 1) {
+      const entry = raw[keys[i]]
+      out[keys[i]] = { disabled: asList(entry !== null && typeof entry === 'object' ? entry.disabled : undefined) }
+    }
+    return out
+  }
   const schema = function (input) {
     const source = input !== null && typeof input === 'object' ? input : {}
     const raw = typeof source.repo === 'string' ? source.repo.trim() : ''
-    return { repo: raw === '' ? defaults.repo : raw }
+    return {
+      repo: raw === '' ? defaults.repo : raw,
+      disabled: asList(source.disabled),
+      workspaces: asWorkspaces(source.workspaces),
+    }
   }
   schema.type = 'object'
   schema.dict = {}
@@ -47,7 +74,11 @@ function makeSchema(defaults) {
   schema.toJSON = function () {
     return {
       type: 'object',
-      properties: { repo: { type: 'string', default: defaults.repo } },
+      properties: {
+        repo: { type: 'string', default: defaults.repo },
+        disabled: { type: 'array', items: { type: 'string' } },
+        workspaces: { type: 'object' },
+      },
       default: defaults,
     }
   }
@@ -63,6 +94,7 @@ export function apply(ctx) {
   const settings = ctx.get('settings')
   const off = new Set()
   const meta = new Map()
+  const sources = new Map()
   let defs = []
   let sig
   let pending
@@ -71,9 +103,18 @@ export function apply(ctx) {
   let repo = DEFAULT_REPO
   let savedTarget
   let currentTarget
+  let lockSignature
+
   const scope = settings === undefined
     ? undefined
     : settings.register(SETTINGS_NS, makeSchema({ repo: DEFAULT_REPO }))
+
+  const str = function (value) { return typeof value === 'string' ? value : '' }
+
+  const messageOf = function (error) {
+    if (error !== null && typeof error === 'object' && typeof error.message === 'string') return error.message
+    return String(error)
+  }
 
   /**
    * Expand a leading `~`.
@@ -96,51 +137,51 @@ export function apply(ctx) {
 
   /** Resolve `~` and `~/…` against the host home directory. */
   const absolute = async function (path) {
-    const text = typeof path === 'string' ? path.trim() : ''
+    const text = str(path).trim()
     if (text !== '~' && !text.startsWith('~/') && !text.startsWith('~\\')) return text
     const base = await home()
-    if (base === undefined) {
-      throw new Error('无法解析 ~：directoryPickerController 不可用，请填绝对路径')
-    }
+    if (base === undefined) throw new Error('无法展开 ~：directoryPickerController 不可用，请填绝对路径')
     if (text === '~') return base
-    const rest = text.slice(2).split(/[\\/]+/).join('\\')
-    return base.replace(/[\\/]+$/, '') + '\\' + rest
+    return base.replace(/[\\/]+$/, '') + '\\' + text.slice(2).split(/[\\/]+/).join('\\')
   }
 
-  const readSetting = function () {
-    if (scope === undefined) return DEFAULT_REPO
+  /** The whole resolved settings value, or a bare default when unmounted. */
+  const readScope = function () {
+    const fallback = { repo: DEFAULT_REPO, disabled: [], workspaces: {} }
+    if (scope === undefined) return fallback
     const value = scope.get()
-    if (value === null || typeof value !== 'object') return DEFAULT_REPO
-    const stored = typeof value.repo === 'string' ? value.repo.trim() : ''
-    return stored === '' ? DEFAULT_REPO : stored
+    if (value === null || typeof value !== 'object') return fallback
+    const stored = str(value.repo).trim()
+    return {
+      repo: stored === '' ? DEFAULT_REPO : stored,
+      disabled: Array.isArray(value.disabled) ? value.disabled.slice() : [],
+      workspaces: value.workspaces !== null && typeof value.workspaces === 'object' ? value.workspaces : {},
+    }
   }
-
-  // The persisted value wins over the constant as soon as the namespace is up.
-  repo = readSetting()
 
   const persist = async function (next) {
-    if (scope === undefined) throw new Error('the settings service is not mounted, so the repository path cannot be saved')
-    await scope.update({ repo: next })
+    if (scope === undefined) throw new Error('设置服务未挂载')
+    await scope.update(next)
   }
 
-  /**
-   * Adopt a repository path and drop everything derived from the previous one:
-   * the parsed definitions, the scan signature and the resolved target.
-   */
+  repo = readScope().repo
+
+  /** Drop everything derived from the previous repository path. */
   const adopt = function (next) {
     const changed = next !== repo
     repo = next
     if (!changed) return false
     defs = []
     meta.clear()
+    sources.clear()
     sig = undefined
+    lockSignature = undefined
     pending = undefined
     savedTarget = undefined
     currentTarget = undefined
     return true
   }
 
-  const str = function (value) { return typeof value === 'string' ? value : '' }
   const unquote = function (value) {
     const s = str(value).trim()
     if (s.length >= 2) {
@@ -151,12 +192,11 @@ export function apply(ctx) {
     return s
   }
 
-  /** Record what the panel needs about a skill, with every field a string. */
   const remember = function (name, description, whenToUse) {
     meta.set(str(name), { description: str(description), whenToUse: str(whenToUse) })
   }
 
-  /*** A flat `key: value` frontmatter reader; null means DSH would refuse it too. */
+  /** A flat `key: value` frontmatter reader; null means DSH would refuse it too. */
   const parse = function (raw) {
     let s = raw
     if (s.charCodeAt(0) === 0xfeff) s = s.slice(1)
@@ -204,16 +244,70 @@ export function apply(ctx) {
     }
   }
 
-  /**
-   * Resolve the configured path once per path value. `~` is left to the
-   * filesystem service, which owns home expansion for this deployment.
-   */
   const target = async function () {
     if (currentTarget !== undefined && savedTarget === repo) return currentTarget
     const resolved = await fs.resolve(await absolute(repo))
     savedTarget = repo
     currentTarget = resolved
     return resolved
+  }
+
+  /**
+   * Read the repository's install ledger: `.skill-lock.json` maps each skill
+   * directory to the GitHub repo it came from, or marks it `local`.
+   */
+  const readLock = async function (root) {
+    const list = await entries(root)
+    let file
+    for (let i = 0; i < list.length; i += 1) {
+      if (list[i].type === 'file' && list[i].name === LOCK_NAME) file = list[i]
+    }
+    if (file === undefined) return null
+    const signature = String(file.version)
+    if (signature === lockSignature) return null
+    let raw
+    try {
+      raw = await fs.readText(file.target)
+    } catch (error) {
+      return null
+    }
+    lockSignature = signature
+    let parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      console.error('skill-hub: ' + LOCK_NAME + ' is not valid JSON, sources stay unlabelled')
+      return null
+    }
+    const found = new Map()
+    const rows = parsed !== null && typeof parsed === 'object' && Array.isArray(parsed.skills) ? parsed.skills : []
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i]
+      if (row === null || typeof row !== 'object') continue
+      const name = str(row.name)
+      if (name === '') continue
+      found.set(name, { type: str(row.type), repo: str(row.repo) })
+    }
+    return found
+  }
+
+  /**
+   * Turn one ledger row into what the panel shows: a group key, a display name,
+   * and something that explains the origin when there is no upstream repo.
+   */
+  const sourceOf = function (name, ledger) {
+    const row = ledger === null ? undefined : ledger.get(name)
+    if (row === undefined) {
+      return { group: name, upstream: '', url: '', note: '来源不明：不在仓库的 ' + LOCK_NAME + ' 里' }
+    }
+    if (row.type === 'github' && row.repo !== '') {
+      const parts = row.repo.split('/')
+      return { group: parts[1] === undefined ? row.repo : parts[1], upstream: row.repo, url: 'https://github.com/' + row.repo, note: '' }
+    }
+    if (row.type === 'well-known') {
+      return { group: name, upstream: '', url: '', note: '来自远端 well-known 索引，没有 GitHub 仓库' }
+    }
+    return { group: name, upstream: '', url: '', note: '本地自制，没有上游仓库' }
   }
 
   const scan = async function () {
@@ -233,7 +327,7 @@ export function apply(ctx) {
             marks.push(item.name + ':' + String(inner[j].version))
           }
         }
-      } else if (item.type === 'file' && item.name.toLowerCase().endsWith('.md')) {
+      } else if (item.type === 'file' && item.name.toLowerCase().endsWith('.md') && item.name !== LOCK_NAME) {
         files.push(item.target)
         marks.push(item.name + ':' + String(item.version))
       }
@@ -241,6 +335,7 @@ export function apply(ctx) {
     const next = marks.join('|')
     if (next === sig) return
     sig = next
+    const ledger = await readLock(root)
     const built = []
     for (let i = 0; i < files.length; i += 1) {
       let raw
@@ -253,6 +348,7 @@ export function apply(ctx) {
       if (skill === null) continue
       if (built.some(function (s) { return s.name === skill.name })) continue
       built.push(skill)
+      sources.set(skill.name, sourceOf(skill.name, ledger))
     }
     defs = built
     poke()
@@ -292,22 +388,72 @@ export function apply(ctx) {
     }
   }, 'demo restore')
 
-  /**
-   * Follow the settings document rather than only the panel. An edit made in
-   * `settings.yaml` while DSH runs reaches this scope's watcher, which adopts
-   * the new path and republishes the catalog.
-   */
+  /** Which workspace owns this session, and the disable list that applies. */
+  const loadScope = function (sessionId) {
+    const value = readScope()
+    const registry = ctx.get('workspaceRegistry')
+    let workspace = null
+    if (registry !== undefined && typeof sessionId === 'string' && sessionId !== '') {
+      try {
+        const all = registry.list()
+        for (let i = 0; i < all.length; i += 1) {
+          const ids = all[i].sessionIds
+          for (let j = 0; j < ids.length; j += 1) {
+            if (String(ids[j]) === sessionId) workspace = all[i]
+          }
+        }
+      } catch (error) {
+        workspace = null
+      }
+    }
+    if (workspace === null) {
+      return { key: '', title: '全局', disabled: value.disabled }
+    }
+    const key = str(workspace.path)
+    const title = str(workspace.title)
+    const entry = value.workspaces[key]
+    const own = entry !== undefined && Array.isArray(entry.disabled)
+    return {
+      key: key,
+      title: title === '' ? key : title,
+      disabled: own ? entry.disabled.slice() : value.disabled.slice(),
+      inherited: !own,
+    }
+  }
+
+  const applyOff = function (disabled) {
+    off.clear()
+    for (let i = 0; i < disabled.length; i += 1) off.add(disabled[i])
+  }
+
+  /** The workspaces a session could switch between, for the scope selector. */
+  const listWorkspaces = function () {
+    const out = []
+    const registry = ctx.get('workspaceRegistry')
+    if (registry === undefined) return out
+    try {
+      const all = registry.list()
+      for (let i = 0; i < all.length; i += 1) {
+        const key = str(all[i].path)
+        if (key === '') continue
+        const title = str(all[i].title)
+        out.push({ key: key, title: title === '' ? key : title })
+      }
+    } catch (error) {
+      return []
+    }
+    return out
+  }
+
   if (scope !== undefined && typeof scope.watch === 'function') {
     ctx.effect(function () {
       const stop = scope.watch(function () {
-        if (adopt(readSetting())) {
+        if (adopt(readScope().repo)) {
           kick()
           ensure()
         }
       })
-      return function () {
-        stop()
-      }
+      return function () { stop() }
     }, 'demo settings watch')
   }
 
@@ -319,7 +465,8 @@ export function apply(ctx) {
         list: async function () {
           await ensure()
           return defs.map(function (def) {
-            return {
+            const source = sources.get(def.name)
+            const skill = {
               name: def.name,
               description: def.description,
               whenToUse: def.whenToUse,
@@ -330,6 +477,15 @@ export function apply(ctx) {
               locator: def.name,
               resourceBase: { kind: 'directory', path: repo },
             }
+            if (source !== undefined) {
+              skill.metadata = {
+                series: source.group,
+                upstream: source.upstream,
+                url: source.url,
+                note: source.note,
+              }
+            }
+            return skill
           })
         },
         get: async function (candidate) {
@@ -360,11 +516,16 @@ export function apply(ctx) {
     for (let i = 0; i < defs.length; i += 1) {
       const def = defs[i]
       seen.add(def.name)
+      const source = sources.get(def.name)
       out.push({
         name: def.name,
         description: def.description,
         whenToUse: def.whenToUse,
-        provider: 'agents-repo',
+        origin: 'repo',
+        series: source === undefined ? def.name : source.group,
+        upstream: source === undefined ? '' : source.upstream,
+        url: source === undefined ? '' : source.url,
+        note: source === undefined ? '' : source.note,
         enabled: !off.has(def.name),
       })
     }
@@ -374,7 +535,11 @@ export function apply(ctx) {
         name: str(name),
         description: str(info.description),
         whenToUse: str(info.whenToUse),
-        provider: 'preset',
+        origin: 'preset',
+        series: str(name),
+        upstream: '',
+        url: '',
+        note: '由当前 agent 预设提供，随预设启用，不在技能仓库里',
         enabled: !off.has(name),
       })
     })
@@ -382,18 +547,37 @@ export function apply(ctx) {
     return out
   }
 
-  const flip = function (names, enabled) {
-    for (let i = 0; i < names.length; i += 1) {
-      const name = names[i]
-      if (typeof name !== 'string' || name === '') continue
-      if (enabled) off.delete(name)
-      else off.add(name)
+  /**
+   * Write a new disabled list for exactly one scope: a workspace path, or the
+   * global list when the key is empty.
+   */
+  const writeScope = async function (key, disabled) {
+    if (key === '') {
+      await persist({ disabled: disabled })
+      return
     }
-    kick()
+    const value = readScope()
+    const workspaces = {}
+    const keys = Object.keys(value.workspaces)
+    for (let i = 0; i < keys.length; i += 1) workspaces[keys[i]] = value.workspaces[keys[i]]
+    workspaces[key] = { disabled: disabled }
+    await persist({ workspaces: workspaces })
   }
 
-  harness.handle('hub:rows', async function () {
+  harness.handle('hub:state', async function (args) {
+    const req = args === undefined ? {} : args
     await ensure()
+    const active = loadScope(req.sessionId)
+    const requested = typeof req.workspace === 'string' ? req.workspace : undefined
+    if (requested === undefined || requested === active.key) {
+      applyOff(active.disabled)
+    } else if (requested === '') {
+      applyOff(readScope().disabled)
+    } else {
+      const value = readScope()
+      const entry = value.workspaces[requested]
+      applyOff(entry !== undefined && Array.isArray(entry.disabled) ? entry.disabled : value.disabled)
+    }
     const current = await snap({})
     const live = current.skills || []
     for (let i = 0; i < live.length; i += 1) {
@@ -402,61 +586,93 @@ export function apply(ctx) {
       remember(name, live[i].description, live[i].whenToUse)
     }
     const rows = catalog()
+    const value = readScope()
+    const workspaces = []
+    const keys = Object.keys(value.workspaces)
+    for (let i = 0; i < keys.length; i += 1) workspaces.push(keys[i])
     return {
       rows: rows,
       total: rows.length,
       offCount: off.size,
+      scopes: listWorkspaces(),
+      active: active.key,
+      activeTitle: active.title,
+      inherited: active.inherited === true,
+      configured: workspaces,
       repo: repo,
       repoDefault: DEFAULT_REPO,
       repoStored: repo !== DEFAULT_REPO,
       repoWritable: scope !== undefined,
       repoLoaded: defs.length,
+      lockFile: LOCK_NAME,
     }
   })
 
   harness.handle('hub:flip', async function (args) {
     const req = args === undefined ? {} : args
-    flip(Array.isArray(req.names) ? req.names : [], req.enabled !== false)
-    return { ok: true, offCount: off.size }
+    const key = typeof req.workspace === 'string' ? req.workspace : ''
+    const names = Array.isArray(req.names) ? req.names : []
+    const enabled = req.enabled !== false
+    for (let i = 0; i < names.length; i += 1) {
+      const name = names[i]
+      if (typeof name !== 'string' || name === '') continue
+      if (enabled) off.delete(name)
+      else off.add(name)
+    }
+    const list = Array.from(off)
+    try {
+      await writeScope(key, list)
+    } catch (error) {
+      return { ok: false, offCount: off.size, error: '保存失败：' + messageOf(error) }
+    }
+    kick()
+    return { ok: true, offCount: off.size, error: null }
   })
 
-  /**
-   * Repoint the repository. The value is validated by resolving it through the
-   * filesystem service first, so a typo is reported instead of being saved and
-   * quietly producing an empty catalog.
-   */
+  harness.handle('hub:flip-all', async function (args) {
+    const req = args === undefined ? {} : args
+    const key = typeof req.workspace === 'string' ? req.workspace : ''
+    const enabled = req.enabled !== false
+    const names = Array.isArray(req.names) ? req.names : []
+    const list = []
+    if (!enabled) {
+      for (let i = 0; i < names.length; i += 1) {
+        if (typeof names[i] === 'string' && names[i] !== '') list.push(names[i])
+      }
+    }
+    try {
+      await writeScope(key, list)
+    } catch (error) {
+      return { ok: false, offCount: off.size, error: '保存失败：' + messageOf(error) }
+    }
+    applyOff(list)
+    kick()
+    return { ok: true, offCount: off.size, error: null }
+  })
+
   harness.handle('hub:repo', async function (args) {
     const req = args === undefined ? {} : args
     const wanted = typeof req.repo === 'string' ? req.repo.trim() : ''
     if (wanted === '') {
       try {
-        await persist(DEFAULT_REPO)
+        await persist({ repo: DEFAULT_REPO })
       } catch (error) {
-        const message = error !== null && typeof error === 'object' && typeof error.message === 'string'
-          ? error.message
-          : String(error)
-        return { ok: false, repo: repo, error: '保存失败：' + message }
+        return { ok: false, repo: repo, error: '保存失败：' + messageOf(error) }
       }
       adopt(DEFAULT_REPO)
       await ensure()
       return { ok: true, repo: repo, repoStored: false, error: null }
     }
-    if (fs === undefined) return { ok: false, repo: repo, error: 'filesystem service is not mounted' }
+    if (fs === undefined) return { ok: false, repo: repo, error: '文件系统服务未挂载' }
     try {
       await fs.resolve(await absolute(wanted))
     } catch (error) {
-      const message = error !== null && typeof error === 'object' && typeof error.message === 'string'
-        ? error.message
-        : String(error)
-      return { ok: false, repo: repo, error: '路径无法解析：' + message }
+      return { ok: false, repo: repo, error: '路径无法解析：' + messageOf(error) }
     }
     try {
-      await persist(wanted)
+      await persist({ repo: wanted })
     } catch (error) {
-      const message = error !== null && typeof error === 'object' && typeof error.message === 'string'
-        ? error.message
-        : String(error)
-      return { ok: false, repo: repo, error: '保存失败：' + message }
+      return { ok: false, repo: repo, error: '保存失败：' + messageOf(error) }
     }
     adopt(wanted)
     await ensure()

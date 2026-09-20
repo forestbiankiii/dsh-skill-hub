@@ -4,6 +4,11 @@
  * Small enough that the built payload can be read back and re-submitted
  * verbatim. Full styling and the repository diagnostics live in
  * `src/client/client.js`.
+ *
+ * This is the copy the running `skhub-1/pkg-2` Package was built from. Its one
+ * difference from the earlier revision is visible failure handling: a rejected
+ * `hub:rows` used to leave the panel stuck on the loading line forever, so it
+ * now shows the message and offers a retry.
  */
 
 const css = [
@@ -21,6 +26,7 @@ const css = [
   '.hub-on{color:var(--dsw-alias-state-success-primary,#22c55e);border-color:var(--dsw-alias-state-success-primary,#22c55e)}',
   '.hub-grow{flex:1}',
   '.hub-desc{margin-top:4px;color:var(--dsw-alias-label-secondary,#ccc)}',
+  '.hub-note{margin-top:4px;color:var(--dsw-alias-label-tertiary,#999)}',
   '.hub-sw{position:relative;width:36px;height:20px;flex:none;border-radius:10px;border:1px solid var(--dsw-alias-border-l2,#52525b);background:var(--dsw-alias-bg-layer-2,#3f3f46);cursor:pointer;padding:0}',
   '.hub-sw-on{background:var(--dsw-alias-state-success-primary,#10b981);border-color:var(--dsw-alias-state-success-primary,#10b981)}',
   '.hub-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:7px;background:#fff;transition:transform 0.16s}',
@@ -45,16 +51,29 @@ function Hub() {
   const q = React.useState('')
   const query = q[0]
   const setQuery = q[1]
+  const errState = React.useState(null)
+  const trouble = errState[0]
+  const setTrouble = errState[1]
 
   const load = React.useCallback(function () {
-    host.call('hub:rows', {}).then(setData).catch(function (error) {
-      console.error('hub:rows failed', error)
+    host.call('hub:rows', {}).then(function (result) {
+      setTrouble(null)
+      setData(result)
+    }).catch(function (error) {
+      setTrouble(String(error && error.message ? error.message : error))
     })
   }, [])
 
   React.useEffect(function () { load() }, [load])
 
-  if (data === null) return React.createElement('div', { className: 'hub' }, '正在读取技能…')
+  if (data === null) {
+    const waiting = [React.createElement('div', { className: 'hub-count', key: 'wait' }, '正在读取技能…')]
+    if (trouble !== null) {
+      waiting.push(React.createElement('div', { className: 'hub-note', key: 'err' }, '读取失败：' + trouble))
+      waiting.push(React.createElement('button', { type: 'button', className: 'hub-btn', key: 'retry', onClick: load }, '重试'))
+    }
+    return React.createElement('div', { className: 'hub' }, waiting)
+  }
 
   const needle = query.trim().toLowerCase()
   const shown = data.rows.filter(function (row) {
@@ -86,7 +105,7 @@ function Hub() {
 
   return React.createElement('div', { className: 'hub' },
     React.createElement('div', { className: 'hub-bar' },
-      React.createElement('span', { className: 'hub-count' }, '共 ' + data.total + ' 个技能，已关闭 ' + data.off.length + ' 个'),
+      React.createElement('span', { className: 'hub-count' }, '共 ' + data.total + ' 个技能，已关闭 ' + data.offCount + ' 个'),
       React.createElement('button', { type: 'button', className: 'hub-btn', onClick: function () { flipAll(true) } }, '全部开启'),
       React.createElement('button', { type: 'button', className: 'hub-btn', onClick: function () { flipAll(false) } }, '全部关闭'),
       React.createElement('button', { type: 'button', className: 'hub-btn', onClick: load }, '刷新'),
@@ -102,11 +121,8 @@ function Hub() {
       shown.length === 0
         ? React.createElement('div', { className: 'hub-count' }, '没有匹配的技能')
         : shown.map(function (row) {
-          return React.createElement('div', {
-            className: 'hub-item' + (row.enabled ? '' : ' hub-down'),
-            key: row.name,
-          },
-            React.createElement('div', { className: 'hub-row' },
+          const box = [
+            React.createElement('div', { className: 'hub-row', key: 'head' },
               React.createElement('span', { className: 'hub-name' }, row.name),
               React.createElement('span', { className: 'hub-tag' + (row.enabled ? ' hub-on' : '') }, row.enabled ? '已开启' : '已关闭'),
               React.createElement('span', { className: 'hub-tag' }, row.provider),
@@ -117,10 +133,18 @@ function Hub() {
                 flip: function (next) { flip(row.name, next) },
               }),
             ),
-            React.createElement('div', { className: 'hub-desc' }, row.description),
-          )
+            React.createElement('div', { className: 'hub-desc', key: 'desc' }, row.description),
+          ]
+          if (row.whenToUse !== '') {
+            box.push(React.createElement('div', { className: 'hub-note', key: 'when' }, '适用场景：' + row.whenToUse))
+          }
+          return React.createElement('div', {
+            className: 'hub-item' + (row.enabled ? '' : ' hub-down'),
+            key: row.name,
+          }, box)
         }),
     ),
+    React.createElement('div', { className: 'hub-note' }, '仓库：' + data.repo),
   )
 }
 

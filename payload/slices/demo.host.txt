@@ -6,9 +6,20 @@
  * built payload can be read back and re-submitted without truncation. Full
  * commentary, repository diagnostics and the polling scan live in
  * `src/host/host.js`; this file keeps only what the switches themselves need.
+ *
+ * This is the copy the running `skhub-1/pkg-2` Package was built from, so it
+ * carries the two fixes that package needed:
+ *
+ *   1. `parse()` used to leave `whenToUse` off the definition it returned, so
+ *      the first catalog row carried `whenToUse: undefined` and the panel RPC
+ *      rejected the whole response ("must be lossless JSON"). The field is now
+ *      always a string.
+ *   2. the row count travels as `offCount: off.size` rather than as an array
+ *      converted from the Set on every call.
  */
 
-/** The shared skill repository every agent on this machine reads. */
+/** The shared skill
+ repository every agent on this machine reads. */
 const REPO = 'C:\\Users\\17196\\.agents\\skills'
 
 /** Kebab-case, exactly as the registry validates skill names. */
@@ -27,19 +38,24 @@ function apply(ctx) {
   let defs = []
   let sig
   let pending
-  let poke = function ()
- {}
+  let poke = function () {}
 
-  const text = function (value) { return typeof value === 'string' ? value : '' }
+  const str = function (value) { return typeof value === 'string' ? value : '' }
 
   const unquote = function (value) {
-    const s = text(value).trim()
+    const s = str(value).trim()
     if (s.length >= 2) {
       const a = s.charAt(0)
       const b = s.charAt(s.length - 1)
       if ((a === '"' && b === '"') || (a === "'" && b === "'")) return s.slice(1, s.length - 1)
     }
     return s
+  }
+
+  /** Record wh
+at the panel needs about a skill, with every field a string. */
+  const remember = function (name, description, whenToUse) {
+    meta.set(str(name), { description: str(description), whenToUse: str(whenToUse) })
   }
 
   /*** A flat `key: value` frontmatter reader; null means DSH would refuse it too. */
@@ -55,12 +71,12 @@ function apply(ctx) {
     let shut = false
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i].replace(/\r$/, '')
-      if (shut) { body.push(line); 
-continue }
+      if (shut) { body.push(line); continue }
       if (line.trim() === '---') { shut = true; continue }
       if (/^\s/.test(line)) continue
       const c = line.indexOf(':')
-      if (c <= 0) continue
+      if (c <
+= 0) continue
       const k = line.slice(0, c).trim()
       const v = line.slice(c + 1).trim()
       if (k !== '' && v !== '') data[k] = v
@@ -69,22 +85,24 @@ continue }
     const name = unquote(data.name)
     const description = unquote(data.description)
     if (name === '' || description === '' || !NAME.test(name)) return null
-    const when = data.whenToUse !== undefined ? data.whenToUse : data['when-to-use']
-    meta.set(name, { description: description, whenToUse: when === undefined ? '' : unquote(when) })
+    const whenRaw = data.whenToUse !== undefined ? data.whenToUse : data['when-to-use']
+    const when = whenRaw === undefined ? '' : unquote(whenRaw)
+    remember(name, description, when)
     return {
       name: name,
       description: description,
+      whenToUse: when,
       modelInvocable: data.modelInvocable === undefined || unquote(data.modelInvocable).toLowerCase() !== 'false',
-      userInvocable: data.userInvocable === undef
-ined || unquote(data.userInvocable).toLowerCase() !== 'false',
+      userInvocable: data.userInvocable === undefined || unquote(data.userInvocable).toLowerCase() !== 'false',
       content: body.join('\n').trim(),
     }
   }
 
-  const list = async function (dir) {
+  const entries
+ = async function (dir) {
     try {
-      const rows = await fs.listDir(dir)
-      return Array.isArray(rows) ? rows : []
+      const list = await fs.listDir(dir)
+      return Array.isArray(list) ? list : []
     } catch (error) {
       return []
     }
@@ -93,23 +111,23 @@ ined || unquote(data.userInvocable).toLowerCase() !== 'false',
   const scan = async function () {
     if (fs === undefined) return
     const root = await fs.resolve(REPO)
-    const top = await list(root)
-    const found = []
+    const top = await entries(root)
+    const files = []
     const marks = []
     for (let i = 0; i < top.length; i += 1) {
       const item = top[i]
       if (typeof item.name !== 'string' || item.target === undefined) continue
       if (item.type === 'directory') {
-        const inner = await list(item.target)
+        const inner = await entries(item.target)
         for (let j = 0; j < inner.length; j += 1) {
           if (inner[j].type === 'file' && inner[j].name === 'SKILL.md' && inner[j].target !== undefined) {
-            found.push(inn
-er[j].target)
+            files.push(inner[j].target)
             marks.push(item.name + ':' + String(inner[j].version))
           }
         }
-      } else if (item.type === 'file' && item.name.toLowerCase().endsWith('.md')) {
-        found.push(item.target)
+      } else if 
+(item.type === 'file' && item.name.toLowerCase().endsWith('.md')) {
+        files.push(item.target)
         marks.push(item.name + ':' + String(item.version))
       }
     }
@@ -117,15 +135,17 @@ er[j].target)
     if (next === sig) return
     sig = next
     const built = []
-    for (let i = 0; i < found.length; i += 1) {
+    for (let i = 0; i < files.length; i += 1) {
       let raw
       try {
-        raw = await fs.readText(found[i])
+        raw = await fs.readText(files[i])
       } catch (error) {
         continue
       }
       const skill = parse(raw)
-      if (skill !== null && !built.some(function (s) { return s.name === skill.name })) built.push(skill)
+      if (skill === null) continue
+      if (built.some(function (s) { return s.name === skill.name })) continue
+      built.push(skill)
     }
     defs = built
     poke()
@@ -133,13 +153,13 @@ er[j].target)
 
   const ensure = function () {
     if (pending !== undefined) return pending
-    pending = scan().then(function () { pending = undefined }, function () { pending = undef
-ined })
+    pending = scan().then(function () { pending = undefined }, function () { pending = undefined })
     return pending
   }
 
   const snap = skills.snapshot.bind(skills)
-  const get = skills.get.bind(skills)
+  const get 
+= skills.get.bind(skills)
   const kick = function () {
     if (typeof skills.invalidateCache === 'function') skills.invalidateCache()
   }
@@ -166,18 +186,19 @@ ined })
     }
   }, 'demo restore')
 
-  if (f
-s !== undefined) {
+  if (fs !== undefined) {
     ctx.skills.registerProvider(function (control) {
-      poke = function () { control.invalidate() }
+      poke = fun
+ction () { control.invalidate() }
       return {
         name: 'agents-repo',
         list: async function () {
           await ensure()
           return defs.map(function (def) {
-            const skill = {
+            return {
               name: def.name,
               description: def.description,
+              whenToUse: def.whenToUse,
               invocation: { modelInvocable: def.modelInvocable, userInvocable: def.userInvocable },
               source: 'user-agents',
               provider: 'agents-repo',
@@ -185,25 +206,22 @@ s !== undefined) {
               locator: def.name,
               resourceBase: { kind: 'directory', path: REPO },
             }
-            if (def.whenToUse !== '') skill.whenToUse = def.whenToUse
-            return skill
           })
         },
         get: async function (candidate) {
-          const def = defs.find(function (s) { return s.na
-me === candidate.name })
+          const def = defs.filter(function (s) { return s.name === candidate.name })[0]
           if (def === undefined) return undefined
-          const skill = {
+          return {
             name: def.name,
-            description: def.description,
+            description
+: def.description,
+            whenToUse: def.whenToUse,
             invocation: { modelInvocable: def.modelInvocable, userInvocable: def.userInvocable },
             source: 'user-agents',
             provider: 'agents-repo',
             resourceBase: { kind: 'directory', path: REPO },
             content: def.content,
           }
-          if (def.whenToUse !== '') skill.whenToUse = def.whenToUse
-          return skill
         },
       }
     })
@@ -212,28 +230,28 @@ me === candidate.name })
     }, 'demo poll')
   }
 
-  /** Both layers, de-duplicated by name: the live registries' own summaries. */
-  const rows = function () {
+  /** Repository rows first, then whatever the live registries reported. */
+  const catalog = function () {
     const out = []
     const seen = new Set()
     for (let i = 0; i < defs.length; i += 1) {
-      const def = de
-fs[i]
+      const def = defs[i]
       seen.add(def.name)
       out.push({
         name: def.name,
         description: def.description,
         whenToUse: def.whenToUse,
         provider: 'agents-repo',
-        enabled: !off.has(def.name),
+        enabled: !off.has(def.
+name),
       })
     }
     meta.forEach(function (info, name) {
       if (seen.has(name)) return
       out.push({
-        name: name,
-        description: info.description,
-        whenToUse: info.whenToUse,
+        name: str(name),
+        description: str(info.description),
+        whenToUse: str(info.whenToUse),
         provider: 'preset',
         enabled: !off.has(name),
       })
@@ -244,31 +262,32 @@ fs[i]
 
   const flip = function (names, enabled) {
     for (let i = 0; i < names.length; i += 1) {
-      if (typeof names[i] !== 'string' || names[i] === '') continue
-      if (enabled) off.delete(names[i])
-      else off.add(names[i])
+      const name = names[i]
+      if (typeof name !== 'string' || name === '') continue
+      if (enabled) off.delete(name)
+      else off.add(name)
     }
     kick()
   }
 
   harness.handle('hub:rows', async function () {
-  
-  await ensure()
+    await ensure()
     const current = await snap({})
     const live = current.skills || []
     for (let i = 0; i < live.length; i += 1) {
-      const name = text(live[i].name)
-      if (name === '' || meta.has(name)) continue
-      meta.set(name, { description: text(live[i].description), whenToUse: text(live[i].whenToUse) })
+      const name = str(live[i].name)
+      
+if (name === '' || meta.has(name)) continue
+      remember(name, live[i].description, live[i].whenToUse)
     }
-    const catalog = rows()
-    return { rows: catalog, total: catalog.length, off: Array.from(off), repo: REPO }
+    const rows = catalog()
+    return { rows: rows, total: rows.length, offCount: off.size, repo: REPO }
   })
 
   harness.handle('hub:flip', async function (args) {
     const req = args === undefined ? {} : args
     flip(Array.isArray(req.names) ? req.names : [], req.enabled !== false)
-    return { ok: true }
+    return { ok: true, offCount: off.size }
   })
 }
 

@@ -2,21 +2,22 @@
  * Build the payload strings a `cordis_define` call needs.
  *
  * Usage:
- *   node tools/build-payload.mjs                  # both variants, on stdout
+ *   node tools/build-payload.mjs                  # the reference variant, on stdout
  *   node tools/build-payload.mjs --json           # reference: {"host":"…","client":"…"}
  *   node tools/build-payload.mjs --compact        # compact:  {"host":"…","client":"…"}
+ *   node tools/build-payload.mjs --demo           # demo:     {"host":"…","client":"…"}
  *   node tools/build-payload.mjs --write          # refresh every payload/ file
  *   node tools/build-payload.mjs --check          # fail when payload/ is stale
  *
- * `--check` is the one that matters for the repository: it rebuilds both
- * variants from `src/` and `deploy/` and compares the result byte-for-byte with
+ * `--check` is the one that matters for the repository: it rebuilds every
+ * variant from `src/` and `deploy/` and compares the result byte-for-byte with
  * the committed `payload/` files. A hand-edited payload, or a source change
  * that was never rebuilt, fails there instead of silently shipping.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ROOT, compact, reference } from './payload.mjs'
+import { ROOT, compact, demo, reference } from './payload.mjs'
 
 const ARTIFACTS = [
   { file: 'payload/host.txt', text: () => reference().host },
@@ -25,6 +26,9 @@ const ARTIFACTS = [
   { file: 'payload/compact.host.txt', text: () => compact().host },
   { file: 'payload/compact.client.txt', text: () => compact().client },
   { file: 'payload/compact.json', text: () => JSON.stringify(compact()) },
+  { file: 'payload/demo.host.txt', text: () => demo().host },
+  { file: 'payload/demo.client.txt', text: () => demo().client },
+  { file: 'payload/demo.json', text: () => JSON.stringify(demo()) },
 ]
 
 const argv = process.argv.slice(2)
@@ -57,7 +61,7 @@ if (argv.includes('--check')) {
     process.stdout.write(`wrote ${artifact.file}\n`)
   }
 } else {
-  const which = argv.includes('--compact') ? compact() : reference()
+  const which = argv.includes('--demo') ? demo() : argv.includes('--compact') ? compact() : reference()
   if (argv.includes('--json')) {
     process.stdout.write(JSON.stringify(which))
   } else {

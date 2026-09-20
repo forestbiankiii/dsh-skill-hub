@@ -1,3 +1,4 @@
+'use strict'
 /**
  * dsh-skill-hub — demo host half.
  *
@@ -28,7 +29,7 @@ const inject = ['skills', 'timer']
 /**
  * @param {object} ctx - the guarded Cordis context a host half receives.
  */
-export function apply(ctx) {
+function apply(ctx) {
   const skills = ctx.skills
   const fs = ctx.get('fs')
   const off = new Set()
@@ -279,3 +280,5 @@ export function apply(ctx) {
     return { ok: true, offCount: off.size }
   })
 }
+
+return { inject: inject, apply: apply }

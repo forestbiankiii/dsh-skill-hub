@@ -76,15 +76,19 @@ export function apply(ctx) {
       return unquote(data[key]).toLowerCase() !== 'false'
     }
     const when = data.whenToUse !== undefined ? data.whenToUse : data['when-to-use']
-    const out = {
+    /**
+     * `whenToUse` is always a string, never undefined: this definition travels
+     * through the panel RPC, whose return value must be lossless JSON, and an
+     * `undefined` field is rejected outright.
+     */
+    return {
       name: name,
       description: description,
+      whenToUse: when === undefined ? '' : unquote(when),
       modelInvocable: flag('modelInvocable'),
       userInvocable: flag('userInvocable'),
       content: body.join('\n').trim(),
     }
-    if (when !== undefined && when !== '') out.whenToUse = unquote(when)
-    return out
   }
 
   const entries = async function (target) {
@@ -163,7 +167,7 @@ export function apply(ctx) {
       provider: 'agents-repo',
       resourceBase: { kind: 'directory', path: REPO },
     }
-    if (definition.whenToUse !== undefined) skill.whenToUse = definition.whenToUse
+    if (definition.whenToUse !== '') skill.whenToUse = definition.whenToUse
     return skill
   }
 

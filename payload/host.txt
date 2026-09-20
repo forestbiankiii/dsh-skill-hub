@@ -153,15 +153,18 @@ function apply(ctx) {
       : parsed.data['when-to-use']
     const modelFlag = flagOf(parsed.data, 'modelInvocable')
     const userFlag = flagOf(parsed.data, 'userInvocable')
+    /**
+     * `whenToUse` is always a string, never undefined: this definition travels
+     * through the panel RPC, whose return value must be lossless JSON, and an
+     * `undefined` field is rejected outright.
+     */
     const definition = {
       name: name,
       description: description,
+      whenToUse: rawWhenToUse === undefined ? '' : unquote(rawWhenToUse),
       modelInvocable: modelFlag === undefined ? true : modelFlag,
       userInvocable: userFlag === undefined ? true : userFlag,
       content: parsed.body.trim(),
-    }
-    if (rawWhenToUse !== undefined && rawWhenToUse !== '') {
-      definition.whenToUse = unquote(rawWhenToUse)
     }
     return { definition: definition }
   }
@@ -228,7 +231,7 @@ function apply(ctx) {
       provider: PROVIDER_NAME,
       resourceBase: { kind: 'directory', path: SKILL_REPO },
     }
-    if (definition.whenToUse !== undefined) skill.whenToUse = definition.whenToUse
+    if (definition.whenToUse !== '') skill.whenToUse = definition.whenToUse
     return skill
   }
 

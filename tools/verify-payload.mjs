@@ -4,8 +4,8 @@
  * The DSH host runner evaluates a Package's halves with
  * `new Function('ctx', 'harness', source)` inside a vm sandbox, and the browser
  * runner does the same for the client half with its own facade. This script
- * reproduces the parse-and-shape step for BOTH variants — the reference build
- * from `src/` and the compact deployment build from `deploy/` — and executes
+ * reproduces the parse-and-shape step for EVERY variant — the reference build
+ * from `src/`, the compact one and the demo one from `deploy/` — and executes
  * each `apply` against a recording stub so the registrations can be asserted.
  *
  * Usage: node tools/verify-payload.mjs
@@ -13,7 +13,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ROOT, compact, reference } from './payload.mjs'
+import { ROOT, compact, demo, reference } from './payload.mjs'
 
 let failures = 0
 
@@ -37,6 +37,13 @@ function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 }
 
+/** The three build variants, in the order the reports print them. */
+const VARIANTS = [
+  { name: 'reference', halves: reference(), dir: 'payload' },
+  { name: 'compact', halves: compact(), dir: 'payload' },
+  { name: 'demo', halves: demo(), dir: 'payload' },
+]
+
 /* --------------------------------------------------- committed bytes audit */
 
 process.stdout.write('committed payloads\n')
@@ -47,6 +54,9 @@ const committed = [
   { label: 'compact host', file: 'payload/compact.host.txt', expected: compact().host },
   { label: 'compact client', file: 'payload/compact.client.txt', expected: compact().client },
   { label: 'compact json', file: 'payload/compact.json', expected: JSON.stringify(compact()) },
+  { label: 'demo host', file: 'payload/demo.host.txt', expected: demo().host },
+  { label: 'demo client', file: 'payload/demo.client.txt', expected: demo().client },
+  { label: 'demo json', file: 'payload/demo.json', expected: JSON.stringify(demo()) },
 ]
 for (const entry of committed) {
   let actual = null
@@ -62,7 +72,7 @@ for (const entry of committed) {
 /* ------------------------------------------------------------ string audits */
 
 process.stdout.write('payload audit\n')
-for (const variant of [{ name: 'reference', halves: reference() }, { name: 'compact', halves: compact() }]) {
+for (const variant of VARIANTS) {
   for (const half of ['host', 'client']) {
     const source = variant.halves[half]
     const code = stripComments(source)
@@ -127,7 +137,7 @@ function makeCtxStub() {
 
 /* ------------------------------------------------------------ host halves */
 
-for (const variant of [{ name: 'reference', halves: reference() }, { name: 'compact', halves: compact() }]) {
+for (const variant of VARIANTS) {
   process.stdout.write(`${variant.name} host\n`)
   calls.providers = 0
   calls.handlers = []
@@ -163,7 +173,13 @@ for (const variant of [{ name: 'reference', halves: reference() }, { name: 'comp
     check('registers two effects', calls.effects === 2, `got ${calls.effects}`)
     check(
       'registers a client RPC surface',
-      calls.handlers.length >= 3,
+      calls.handlers.length >= 2,
+      calls.handlers.join(', '),
+    )
+    check(
+      'exposes a catalog read and a toggle handler',
+      calls.handlers.some((name) => name.endsWith(':rows') || name.endsWith(':state'))
+        && calls.handlers.some((name) => name.endsWith(':flip') || name.endsWith(':toggle')),
       calls.handlers.join(', '),
     )
   } catch (error) {
@@ -173,8 +189,20 @@ for (const variant of [{ name: 'reference', halves: reference() }, { name: 'comp
 
 /* ---------------------------------------------------------- client halves */
 
-for (const variant of [{ name: 'reference', halves: reference() }, { name: 'compact', halves: compact() }]) {
+/**
+ * What each variant contributes. The demo build deliberately drops the General
+ * settings shortcut to stay small, so the expectation is per variant rather
+ * than one shape for all three.
+ */
+const CLIENT_SURFACE = {
+  reference: { slots: 3, shortcut: true },
+  compact: { slots: 3, shortcut: true },
+  demo: { slots: 2, shortcut: false },
+}
+
+for (const variant of VARIANTS) {
   process.stdout.write(`${variant.name} client\n`)
+  const surface = CLIENT_SURFACE[variant.name]
   const registered = []
   const injected = []
   const slotsStub = {
@@ -200,15 +228,22 @@ for (const variant of [{ name: 'reference', halves: reference() }, { name: 'comp
     const plugin = factory(reactStub, { call: async () => ({}) }, { insert: () => {} }, makeCtxStub())
     check('returns { apply }', plugin !== null && typeof plugin.apply === 'function')
     plugin.apply({ get: (name) => (name === 'slots' ? slotsStub : undefined) })
-    check('injects three slots', injected.length === 3, injected.join(', '))
+    check(`injects ${surface.slots} slots`, injected.length === surface.slots, injected.join(', '))
     check(
       'registers settings.section id=skills',
       registered.some((entry) => entry.name === 'settings.section' && entry.id === 'skills'),
     )
-    check(
-      'registers settings.general.item id=skill-hub',
-      registered.some((entry) => entry.name === 'settings.general.item' && entry.id === 'skill-hub'),
-    )
+    if (surface.shortcut) {
+      check(
+        'registers settings.general.item id=skill-hub',
+        registered.some((entry) => entry.name === 'settings.general.item' && entry.id === 'skill-hub'),
+      )
+    } else {
+      check(
+        'skips the General shortcut, as the demo build intends',
+        !registered.some((entry) => entry.name === 'settings.general.item'),
+      )
+    }
     check(
       'registers tool.view.cordis key=self',
       registered.some((entry) => entry.name === 'tool.view.cordis' && entry.key === 'self'),

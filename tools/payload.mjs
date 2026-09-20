@@ -67,3 +67,19 @@ export function compact() {
     client: payload('deploy/compact.client.js', 'apply', false),
   }
 }
+
+/**
+ * The demo copy under `deploy/demo.*.js`.
+ *
+ * Smaller still than {@link compact}: no repository diagnostics, no rescan
+ * control, and no styling beyond the switches. Its point is that the built
+ * payload is short enough to be read back out of the repository and
+ * re-submitted verbatim in a single tool call, which is how a running Package
+ * receives its code without anyone retyping it.
+ */
+export function demo() {
+  return {
+    host: payload('deploy/demo.host.js', 'apply', true),
+    client: payload('deploy/demo.client.js', 'apply', false),
+  }
+}

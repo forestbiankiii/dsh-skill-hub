@@ -1,0 +1,275 @@
+'use strict'
+/**
+ * dsh-skill-hub — demo host half.
+ *
+ * A deliberately minimal build of the same package, small enough that the whole
+ * built payload can be read back and re-submitted without truncation. Full
+ * commentary, repository diagnostics and the polling scan live in
+ * `src/host/host.js`; this file keeps only what the switches themselves need.
+ */
+
+/** The shared skill repository every agent on this machine reads. */
+const REPO = 'C:\\Users\\17196\\.agents\\skills'
+
+/** Kebab-case, exactly as the registry validates skill names. */
+const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+const inject = ['skills', 'timer']
+
+/**
+ * @param {object} ctx - the guarded Cordis context a host half receives.
+ */
+function apply(ctx) {
+  const skills = ctx.skills
+  const fs = ctx.get('fs')
+  const off = new Set()
+  const meta = new Map()
+  let defs = []
+  let sig
+  let pending
+  let poke = function ()
+ {}
+
+  const text = function (value) { return typeof value === 'string' ? value : '' }
+
+  const unquote = function (value) {
+    const s = text(value).trim()
+    if (s.length >= 2) {
+      const a = s.charAt(0)
+      const b = s.charAt(s.length - 1)
+      if ((a === '"' && b === '"') || (a === "'" && b === "'")) return s.slice(1, s.length - 1)
+    }
+    return s
+  }
+
+  /*** A flat `key: value` frontmatter reader; null means DSH would refuse it too. */
+  const parse = function (raw) {
+    let s = raw
+    if (s.charCodeAt(0) === 0xfeff) s = s.slice(1)
+    if (s.slice(0, 3) !== '---') return null
+    const brk = s.indexOf('\n')
+    if (brk < 0) return null
+    const lines = s.slice(brk + 1).split('\n')
+    const data = {}
+    const body = []
+    let shut = false
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i].replace(/\r$/, '')
+      if (shut) { body.push(line); 
+continue }
+      if (line.trim() === '---') { shut = true; continue }
+      if (/^\s/.test(line)) continue
+      const c = line.indexOf(':')
+      if (c <= 0) continue
+      const k = line.slice(0, c).trim()
+      const v = line.slice(c + 1).trim()
+      if (k !== '' && v !== '') data[k] = v
+    }
+    if (!shut) return null
+    const name = unquote(data.name)
+    const description = unquote(data.description)
+    if (name === '' || description === '' || !NAME.test(name)) return null
+    const when = data.whenToUse !== undefined ? data.whenToUse : data['when-to-use']
+    meta.set(name, { description: description, whenToUse: when === undefined ? '' : unquote(when) })
+    return {
+      name: name,
+      description: description,
+      modelInvocable: data.modelInvocable === undefined || unquote(data.modelInvocable).toLowerCase() !== 'false',
+      userInvocable: data.userInvocable === undef
+ined || unquote(data.userInvocable).toLowerCase() !== 'false',
+      content: body.join('\n').trim(),
+    }
+  }
+
+  const list = async function (dir) {
+    try {
+      const rows = await fs.listDir(dir)
+      return Array.isArray(rows) ? rows : []
+    } catch (error) {
+      return []
+    }
+  }
+
+  const scan = async function () {
+    if (fs === undefined) return
+    const root = await fs.resolve(REPO)
+    const top = await list(root)
+    const found = []
+    const marks = []
+    for (let i = 0; i < top.length; i += 1) {
+      const item = top[i]
+      if (typeof item.name !== 'string' || item.target === undefined) continue
+      if (item.type === 'directory') {
+        const inner = await list(item.target)
+        for (let j = 0; j < inner.length; j += 1) {
+          if (inner[j].type === 'file' && inner[j].name === 'SKILL.md' && inner[j].target !== undefined) {
+            found.push(inn
+er[j].target)
+            marks.push(item.name + ':' + String(inner[j].version))
+          }
+        }
+      } else if (item.type === 'file' && item.name.toLowerCase().endsWith('.md')) {
+        found.push(item.target)
+        marks.push(item.name + ':' + String(item.version))
+      }
+    }
+    const next = marks.join('|')
+    if (next === sig) return
+    sig = next
+    const built = []
+    for (let i = 0; i < found.length; i += 1) {
+      let raw
+      try {
+        raw = await fs.readText(found[i])
+      } catch (error) {
+        continue
+      }
+      const skill = parse(raw)
+      if (skill !== null && !built.some(function (s) { return s.name === skill.name })) built.push(skill)
+    }
+    defs = built
+    poke()
+  }
+
+  const ensure = function () {
+    if (pending !== undefined) return pending
+    pending = scan().then(function () { pending = undefined }, function () { pending = undef
+ined })
+    return pending
+  }
+
+  const snap = skills.snapshot.bind(skills)
+  const get = skills.get.bind(skills)
+  const kick = function () {
+    if (typeof skills.invalidateCache === 'function') skills.invalidateCache()
+  }
+
+  skills.snapshot = async function (options) {
+    const s = await snap(options)
+    return {
+      skills: (s.skills || []).filter(function (skill) { return !off.has(skill.name) }),
+      complete: s.complete,
+    }
+  }
+  skills.list = async function (options) { return (await skills.snapshot(options)).skills }
+  skills.get = async function (name, options) {
+    if (off.has(name)) return undefined
+    return get(name, options)
+  }
+
+  ctx.effect(function () {
+    return function () {
+      skills.snapshot = snap
+      skills.list = async function (options) { return (await snap(options)).skills }
+      skills.get = get
+      kick()
+    }
+  }, 'demo restore')
+
+  if (f
+s !== undefined) {
+    ctx.skills.registerProvider(function (control) {
+      poke = function () { control.invalidate() }
+      return {
+        name: 'agents-repo',
+        list: async function () {
+          await ensure()
+          return defs.map(function (def) {
+            const skill = {
+              name: def.name,
+              description: def.description,
+              invocation: { modelInvocable: def.modelInvocable, userInvocable: def.userInvocable },
+              source: 'user-agents',
+              provider: 'agents-repo',
+              rank: 450,
+              locator: def.name,
+              resourceBase: { kind: 'directory', path: REPO },
+            }
+            if (def.whenToUse !== '') skill.whenToUse = def.whenToUse
+            return skill
+          })
+        },
+        get: async function (candidate) {
+          const def = defs.find(function (s) { return s.na
+me === candidate.name })
+          if (def === undefined) return undefined
+          const skill = {
+            name: def.name,
+            description: def.description,
+            invocation: { modelInvocable: def.modelInvocable, userInvocable: def.userInvocable },
+            source: 'user-agents',
+            provider: 'agents-repo',
+            resourceBase: { kind: 'directory', path: REPO },
+            content: def.content,
+          }
+          if (def.whenToUse !== '') skill.whenToUse = def.whenToUse
+          return skill
+        },
+      }
+    })
+    ctx.effect(function () {
+      return ctx.interval(function () { ensure() }, 8000)
+    }, 'demo poll')
+  }
+
+  /** Both layers, de-duplicated by name: the live registries' own summaries. */
+  const rows = function () {
+    const out = []
+    const seen = new Set()
+    for (let i = 0; i < defs.length; i += 1) {
+      const def = de
+fs[i]
+      seen.add(def.name)
+      out.push({
+        name: def.name,
+        description: def.description,
+        whenToUse: def.whenToUse,
+        provider: 'agents-repo',
+        enabled: !off.has(def.name),
+      })
+    }
+    meta.forEach(function (info, name) {
+      if (seen.has(name)) return
+      out.push({
+        name: name,
+        description: info.description,
+        whenToUse: info.whenToUse,
+        provider: 'preset',
+        enabled: !off.has(name),
+      })
+    })
+    out.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0 })
+    return out
+  }
+
+  const flip = function (names, enabled) {
+    for (let i = 0; i < names.length; i += 1) {
+      if (typeof names[i] !== 'string' || names[i] === '') continue
+      if (enabled) off.delete(names[i])
+      else off.add(names[i])
+    }
+    kick()
+  }
+
+  harness.handle('hub:rows', async function () {
+  
+  await ensure()
+    const current = await snap({})
+    const live = current.skills || []
+    for (let i = 0; i < live.length; i += 1) {
+      const name = text(live[i].name)
+      if (name === '' || meta.has(name)) continue
+      meta.set(name, { description: text(live[i].description), whenToUse: text(live[i].whenToUse) })
+    }
+    const catalog = rows()
+    return { rows: catalog, total: catalog.length, off: Array.from(off), repo: REPO }
+  })
+
+  harness.handle('hub:flip', async function (args) {
+    const req = args === undefined ? {} : args
+    flip(Array.isArray(req.names) ? req.names : [], req.enabled !== false)
+    return { ok: true }
+  })
+}
+
+return { inject: inject, apply: apply }

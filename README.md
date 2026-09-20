@@ -114,6 +114,23 @@ node tools/verify-payload.mjs          # 编译两版并断言注册项
 宿主半边的 `REPO` 常量是技能仓库根目录。运行时**不要**用 `--write` 之外的编辑器直接
 改 `payload/` 里的文件，否则 `--check` 会失败——这是故意的。
 
+### 第三个变体：`deploy/demo.*`
+
+`deploy/demo.host.js` + `deploy/demo.client.js` 是同一插件的**最小演示版**：技能列表、
+开关、仓库扫描、搜索都在，去掉的是样式细节、仓库诊断与被忽略条目的展示。
+
+它存在的理由是**回读**。载荷是一整行超长字符串，而读文件的工具会按自己的宽度折行，
+折出来的换行混进代码就把语法打散了。demo 版小到能一次读完不错行，于是
+「构建 → 读出 → 原样再提交」这条往返是通的：
+
+```bash
+node tools/slice-payload.mjs demo           # 按 900 字符切行，写入 payload/slices/
+node tools/slice-payload.mjs demo --check   # 拼回去必须与载荷逐字节相等
+```
+
+`payload/slices/` 里就是切好行的副本，拼接后与 `payload/demo.*` 完全一致——由
+`--check` 保证。
+
 
 ### 自定义技能仓库路径
 

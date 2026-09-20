@@ -103,7 +103,9 @@ export function apply(ctx) {
   let repo = DEFAULT_REPO
   let savedTarget
   let currentTarget
+  let parentTarget
   let lockSignature
+  let lockLedger = null
 
   const scope = settings === undefined
     ? undefined
@@ -159,9 +161,97 @@ export function apply(ctx) {
     }
   }
 
-  const persist = async function (next) {
+  /**
+   * Persist by writing the settings document.
+   *
+   * `scope.update(patch)` cannot work from here. The settings service validates
+   * its patch with `proto === Object.prototype`, and an object literal built in
+   * this sandbox belongs to another realm, so its prototype is never the host's
+   * `Object.prototype` — every write was refused with "must be a plain object".
+   * The RPC boundary clones handler RESULTS into the host realm; arguments
+   * handed INTO a service are passed through as they are.
+   *
+   * So the section is serialised and written through `ctx.fs`, which is the same
+   * seam every other read here uses. The settings provider watches its document,
+   * so the write republishes it and `scope.get()` picks the new value up on the
+   * next read — the in-memory state stays consistent because it always reads.
+   */
+  const YAML_KEY = /^[A-Za-z0-9_-]+$/
+  const yamlScalar = function (value) { return JSON.stringify(String(value)) }
+
+  const documentPath = async function () {
+    const homeDir = await home()
+    if (homeDir === undefined) {
+      throw new Error('找不到 home 目录，无法写入设置文件')
+    }
+    return homeDir.replace(/[\\/]+$/, '') + '\\.dsh\\settings.yaml'
+  }
+
+  /** The `skill-hub:` block, normalized so a rewrite never stacks duplicates. */
+  const renderSection = function (value) {
+    const lines = ['skill-hub:']
+    lines.push('  repo: ' + yamlScalar(value.repo))
+    const disabled = value.disabled
+    if (disabled.length === 0) {
+      lines.push('  disabled: []')
+    } else {
+      lines.push('  disabled:')
+      for (let i = 0; i < disabled.length; i += 1) lines.push('    - ' + yamlScalar(disabled[i]))
+    }
+    const keys = Object.keys(value.workspaces)
+    if (keys.length === 0) {
+      lines.push('  workspaces: {}')
+    } else {
+      lines.push('  workspaces:')
+      for (let i = 0; i < keys.length; i += 1) {
+        const entry = value.workspaces[keys[i]]
+        const list = Array.isArray(entry.disabled) ? entry.disabled : []
+        lines.push('    ' + yamlScalar(keys[i]) + ':')
+        if (list.length === 0) {
+          lines.push('      disabled: []')
+        } else {
+          lines.push('      disabled:')
+          for (let j = 0; j < list.length; j += 1) lines.push('        - ' + yamlScalar(list[j]))
+        }
+      }
+    }
+    return lines.join('\n') + '\n'
+  }
+
+  /** Strip the existing `skill-hub:` block, leaving every other section alone. */
+  const stripSection = function (text) {
+    const lines = text.split('\n')
+    const kept = []
+    let skipping = false
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      const isTopLevel = /^[^\s#]/.test(line)
+      if (isTopLevel) skipping = line.indexOf('skill-hub:') === 0
+      if (!skipping) kept.push(line)
+    }
+    return kept.join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '')
+  }
+
+  const persist = async function (patch) {
     if (scope === undefined) throw new Error('设置服务未挂载')
-    await scope.update(next)
+    const current = readScope()
+    const next = {
+      repo: patch.repo === undefined ? current.repo : patch.repo,
+      disabled: patch.disabled === undefined ? current.disabled : patch.disabled,
+      workspaces: patch.workspaces === undefined ? current.workspaces : patch.workspaces,
+    }
+    const path = await documentPath()
+    const target = await fs.resolve(path)
+    let text = ''
+    try {
+      text = await fs.readText(target)
+    } catch (error) {
+      text = ''
+    }
+    const kept = stripSection(text)
+    const body = renderSection(next)
+    const head = kept.trim() === '' ? '' : kept.replace(/\s+$/, '') + '\n'
+    await fs.writeText(target, head + body)
   }
 
   repo = readScope().repo
@@ -176,9 +266,11 @@ export function apply(ctx) {
     sources.clear()
     sig = undefined
     lockSignature = undefined
+    lockLedger = null
     pending = undefined
     savedTarget = undefined
     currentTarget = undefined
+    parentTarget = undefined
     return true
   }
 
@@ -244,32 +336,65 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * The repository root, plus the directory that holds it. The install ledger
+   * lives BESIDE the repository (`<agents home>/.skill-lock.json` next to
+   * `<agents home>/skills`), so the parent is resolved by trimming the last
+   * segment off the display path.
+   */
   const target = async function () {
     if (currentTarget !== undefined && savedTarget === repo) return currentTarget
     const resolved = await fs.resolve(await absolute(repo))
     savedTarget = repo
     currentTarget = resolved
+    const display = str(resolved.displayPath).replace(/[\\/]+$/, '')
+    const cut = Math.max(display.lastIndexOf('\\'), display.lastIndexOf('/'))
+    parentTarget = undefined
+    if (cut > 0) {
+      try {
+        parentTarget = await fs.resolve(display.slice(0, cut))
+      } catch (error) {
+        parentTarget = undefined
+      }
+    }
     return resolved
   }
 
   /**
    * Read the repository's install ledger: `.skill-lock.json` maps each skill
    * directory to the GitHub repo it came from, or marks it `local`.
+   *
+   * Two things this has to get right. The ledger sits beside the repository, not
+   * inside it — `<agents home>/.skill-lock.json` next to `<agents home>/skills` —
+   * so the parent directory is searched too. And the cache is keyed on the file's
+   * version rather than "have I read it at all": the parsed map is what the
+   * second and later scans replay, because the caller clears its per-skill source
+   * table every time.
    */
-  const readLock = async function (root) {
-    const list = await entries(root)
+  const readLock = async function (root, parent) {
     let file
-    for (let i = 0; i < list.length; i += 1) {
-      if (list[i].type === 'file' && list[i].name === LOCK_NAME) file = list[i]
+    const here = await entries(root)
+    for (let i = 0; i < here.length; i += 1) {
+      if (here[i].type === 'file' && here[i].name === LOCK_NAME) file = here[i]
     }
-    if (file === undefined) return null
+    if (file === undefined && parent !== undefined) {
+      const above = await entries(parent)
+      for (let i = 0; i < above.length; i += 1) {
+        if (above[i].type === 'file' && above[i].name === LOCK_NAME) file = above[i]
+      }
+    }
+    if (file === undefined) {
+      lockSignature = undefined
+      lockLedger = null
+      return null
+    }
     const signature = String(file.version)
-    if (signature === lockSignature) return null
+    if (signature === lockSignature) return lockLedger
     let raw
     try {
       raw = await fs.readText(file.target)
     } catch (error) {
-      return null
+      return lockLedger
     }
     lockSignature = signature
     let parsed
@@ -277,6 +402,7 @@ export function apply(ctx) {
       parsed = JSON.parse(raw)
     } catch (error) {
       console.error('skill-hub: ' + LOCK_NAME + ' is not valid JSON, sources stay unlabelled')
+      lockLedger = null
       return null
     }
     const found = new Map()
@@ -288,6 +414,7 @@ export function apply(ctx) {
       if (name === '') continue
       found.set(name, { type: str(row.type), repo: str(row.repo) })
     }
+    lockLedger = found
     return found
   }
 
@@ -335,7 +462,7 @@ export function apply(ctx) {
     const next = marks.join('|')
     if (next === sig) return
     sig = next
-    const ledger = await readLock(root)
+    const ledger = await readLock(root, parentTarget)
     const built = []
     for (let i = 0; i < files.length; i += 1) {
       let raw

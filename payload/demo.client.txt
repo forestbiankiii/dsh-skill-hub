@@ -31,6 +31,7 @@ const css = [
   '.hub-sw{position:relative;width:36px;height:20px;flex:none;border-radius:10px;border:1px solid var(--dsw-alias-border-l2,#52525b);background:var(--dsw-alias-bg-layer-2,#3f3f46);cursor:pointer;padding:0}',
   '.hub-sw-on{background:var(--dsw-alias-state-success-primary,#10b981);border-color:var(--dsw-alias-state-success-primary,#10b981)}',
   '.hub-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:7px;background:#fff;transition:transform 0.16s}',
+  '.hub-repo{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1,#333)}',
   '.hub-sw-on .hub-knob{transform:translateX(16px)}',
 ].join('\n')
 
@@ -55,11 +56,21 @@ function Hub() {
   const errState = React.useState(null)
   const trouble = errState[0]
   const setTrouble = errState[1]
+  const draftState = React.useState('')
+  const draft = draftState[0]
+  const setDraft = draftState[1]
+  const repoErrState = React.useState(null)
+  const repoError = repoErrState[0]
+  const setRepoError = repoErrState[1]
+  const savingState = React.useState(false)
+  const saving = savingState[0]
+  const setSaving = savingState[1]
 
   const load = React.useCallback(function () {
     host.call('hub:rows', {}).then(function (result) {
       setTrouble(null)
       setData(result)
+      setDraft(result.repo)
     }).catch(function (error) {
       setTrouble(String(error && error.message ? error.message : error))
     })
@@ -104,6 +115,65 @@ function Hub() {
     host.call('hub:flip', { names: names, enabled: next }).catch(function () { load() })
   }
 
+  const saveRepo = function (value) {
+    setSaving(true)
+    setRepoError(null)
+    host.call('hub:repo', { repo: value }).then(function (result) {
+      setSaving(false)
+      if (result.ok === true) load()
+      else setRepoError(String(result.error))
+    }).catch(function (error) {
+      setSaving(false)
+      setRepoError(String(error && error.message ? error.message : error))
+    })
+  }
+
+  /**
+   * The repository editor. Saving validates the path host-side, persists it to
+   * the DSH settings document, rescans, and answers with the truth — so the
+   * field is reseeded from the response rather than from what was typed.
+   */
+  const repoBox = React.createElement('div', { className: 'hub-repo' },
+    React.createElement('div', { className: 'hub-row' },
+      React.createElement('span', { className: 'hub-name' }, '技能仓库地址'),
+      data.repoStored
+        ? React.createElement('span', { className: 'hub-tag hub-on' }, '已自定义')
+        : React.createElement('span', { className: 'hub-tag' }, '默认'),
+      data.repoWritable
+        ? null
+        : React.createElement('span', { className: 'hub-tag' }, '设置服务不可用'),
+      React.createElement('span', { className: 'hub-grow' }),
+      React.createElement('span', { className: 'hub-note' }, '已收录 ' + data.repoLoaded + ' 个'),
+    ),
+    React.createElement('div', { className: 'hub-row' },
+      React.createElement('input', {
+        className: 'hub-search hub-grow',
+        type: 'text',
+        placeholder: data.repoDefault,
+        value: draft,
+        onChange: function (event) { setDraft(event.target.value) },
+      }),
+      React.createElement('button', {
+        type: 'button',
+        className: 'hub-btn',
+        disabled: saving,
+        onClick: function () { saveRepo(draft) },
+      }, saving ? '保存中…' : '保存并重新扫描'),
+      React.createElement('button', {
+        type: 'button',
+        className: 'hub-btn',
+        disabled: saving,
+        onClick: function () { saveRepo('') },
+      }, '恢复默认'),
+    ),
+    repoError !== null && repoError !== undefined
+      ? React.createElement('div', { className: 'hub-note' }, repoError)
+      : React.createElement('div', { className: 'hub-note' }, '留空并保存即恢复默认（' + data.repoDefault + '）；支持 ~ 开头的路径。'),
+    data.repoLoaded === 0
+      ? React.createElement('div', { className: 'hub-note' }, '注意：这个地址下没解析到任何技能。确认目录里有 SKILL.md，或者在上面换成正确路径。')
+      : null,
+  )
+
   return React.createElement('div', { className: 'hub' },
     React.createElement('div', { className: 'hub-bar' },
       React.createElement('span', { className: 'hub-count' }, '共 ' + data.total + ' 个技能，已关闭 ' + data.offCount + ' 个'),
@@ -146,6 +216,7 @@ function Hub() {
         }),
     ),
     React.createElement('div', { className: 'hub-note' }, '仓库：' + data.repo),
+    repoBox,
   )
 }
 

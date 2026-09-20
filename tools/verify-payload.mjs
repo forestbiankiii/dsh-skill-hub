@@ -110,15 +110,66 @@ const fsStub = {
 }
 
 /**
+ * A stand-in for `ctx.settings` that mirrors the real contract closely enough to
+ * catch a misuse: `register(ns, schema)` returns a scope whose `get()` is the
+ * resolved value, whose `update()` persists a patch, and whose `watch()`
+ * notifies. The real service also calls the schema with the merged layers, so
+ * the stub does too — a schema that is not callable fails here.
+ */
+function makeSettingsStub() {
+  const state = { repo: '' }
+  const watchers = new Set()
+  let schemaSeen = null
+
+  const scope = {
+    get: () => schemaSeen({ repo: state.repo }),
+    watch: (callback) => {
+      watchers.add(callback)
+      return () => watchers.delete(callback)
+    },
+    update: async (patch) => {
+      if (patch !== null && typeof patch === 'object' && typeof patch.repo === 'string') {
+        state.repo = patch.repo
+        for (const callback of watchers) callback()
+      }
+    },
+    replace: async (section) => {
+      state.repo = section !== null && typeof section === 'object' ? String(section.repo ?? '') : ''
+      for (const callback of watchers) callback()
+    },
+  }
+
+  return {
+    service: {
+      writable: true,
+      register: (ns, schema) => {
+        if (typeof schema !== 'function') throw new Error('settings.register needs a callable schema')
+        if (typeof schema.toJSON !== 'function') throw new Error('settings.describe needs schema.toJSON()')
+        schemaSeen = schema
+        return scope
+      },
+      get: () => undefined,
+      describe: () => [],
+    },
+    state,
+  }
+}
+
+/**
  * The host façade hands timer verbs through as `ctx.interval(callback, delay)`
  * after the `timer` declaration. `effect` runs its callback the way cordis
  * does, because the repository poll is registered from inside one — a stub that
  * merely counted effects would never observe it.
  */
-function makeCtxStub() {
+function makeCtxStub(settings) {
   return {
     skills: skillsStub,
-    get: (name) => (name === 'fs' ? fsStub : undefined),
+    settings: settings.service,
+    get: (name) => {
+      if (name === 'fs') return fsStub
+      if (name === 'settings') return settings.service
+      return undefined
+    },
     effect: (callback) => {
       if (typeof callback !== 'function') throw new Error('ctx.effect expects a callback')
       calls.effects += 1
@@ -137,6 +188,24 @@ function makeCtxStub() {
 
 /* ------------------------------------------------------------ host halves */
 
+/**
+ * The service each host half declares, per variant, plus how many fiber effects
+ * it owns. The demo build reads its repository path through the settings
+ * service — hence the extra declaration and the third effect (the settings
+ * watcher) — while the other two keep the path as a constant.
+ */
+const HOST_INJECT = {
+  reference: 'skills,timer',
+  compact: 'skills,timer',
+  demo: 'skills,settings,timer',
+}
+
+const HOST_EFFECTS = {
+  reference: 2,
+  compact: 2,
+  demo: 3,
+}
+
 for (const variant of VARIANTS) {
   process.stdout.write(`${variant.name} host\n`)
   calls.providers = 0
@@ -153,6 +222,7 @@ for (const variant of VARIANTS) {
   }
   if (factory === null) continue
 
+  const settings = makeSettingsStub()
   const harnessStub = {
     handle: (method) => {
       calls.handlers.push(method)
@@ -160,17 +230,21 @@ for (const variant of VARIANTS) {
     },
   }
   try {
-    const plugin = factory(makeCtxStub(), harnessStub)
+    const plugin = factory(makeCtxStub(settings), harnessStub)
     check('returns { apply }', plugin !== null && typeof plugin.apply === 'function')
     check(
-      'declares inject [skills, timer]',
-      Array.isArray(plugin.inject) && plugin.inject.join(',') === 'skills,timer',
+      `declares inject [${HOST_INJECT[variant.name]}]`,
+      Array.isArray(plugin.inject) && plugin.inject.join(',') === HOST_INJECT[variant.name],
       JSON.stringify(plugin.inject),
     )
-    plugin.apply(makeCtxStub())
+    plugin.apply(makeCtxStub(settings))
     check('registers one skill provider', calls.providers === 1, `got ${calls.providers}`)
     check('registers one poll interval', calls.intervals === 1, `got ${calls.intervals}`)
-    check('registers two effects', calls.effects === 2, `got ${calls.effects}`)
+    check(
+      `registers ${HOST_EFFECTS[variant.name]} effects`,
+      calls.effects === HOST_EFFECTS[variant.name],
+      `got ${calls.effects}`,
+    )
     check(
       'registers a client RPC surface',
       calls.handlers.length >= 2,
@@ -225,7 +299,7 @@ for (const variant of VARIANTS) {
   try {
     const factory = new Function('React', 'host', 'styles', 'ctx', variant.halves.client)
     check('compiles as a function body', true)
-    const plugin = factory(reactStub, { call: async () => ({}) }, { insert: () => {} }, makeCtxStub())
+    const plugin = factory(reactStub, { call: async () => ({}) }, { insert: () => {} }, makeCtxStub(makeSettingsStub()))
     check('returns { apply }', plugin !== null && typeof plugin.apply === 'function')
     plugin.apply({ get: (name) => (name === 'slots' ? slotsStub : undefined) })
     check(`injects ${surface.slots} slots`, injected.length === surface.slots, injected.join(', '))

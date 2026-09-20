@@ -7,24 +7,53 @@
  * commentary, repository diagnostics and the polling scan live in
  * `src/host/host.js`; this file keeps only what the switches themselves need.
  *
- * This is the copy the running `skhub-1/pkg-2` Package was built from, so it
- * carries the two fixes that package needed:
- *
- *   1. `parse()` used to leave `whenToUse` off the definition it returned, so
- *      the first catalog row carried `whenToUse: undefined` and the panel RPC
- *      rejected the whole response ("must be lossless JSON"). The field is now
- *      always a string.
- *   2. the row count travels as `offCount: off.size` rather than as an array
- *      converted from the Set on every call.
+ * The repository path is a user setting, not a constant: it resolves through
+ * `ctx.settings` and persists to the DSH settings document, so the panel can
+ * repoint the plugin without editing code. The default is home-relative rather
+ * than an absolute path, so another machine gets its own `~/.agents/skills`.
  */
 
-/** The shared skill repository every agent on this machine reads. */
-const REPO = 'C:\\Users\\17196\\.agents\\skills'
+/** Used when the settings document carries no override. */
+const DEFAULT_REPO = '~/.agents/skills'
+
+/** The namespace this plugin owns in the DSH settings document. */
+const SETTINGS_NS = 'skill-hub'
 
 /** Kebab-case, exactly as the registry validates skill names. */
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
-const inject = ['skills', 'timer']
+const inject = ['skills', 'settings', 'timer']
+/**
+ * A schemastery-shaped schema, built by hand.
+ *
+ * The sandbox withholds `require`, so `@deepseek-ai/schemastery` is not
+ * reachable from a dynamic package. The settings service needs only three
+ * things from a schema: it must be callable to resolve a value, it must carry
+ * `toJSON()` for the configuration descriptor, and it must describe its
+ * container shape (`type` plus `dict`) for secret redaction. That is the whole
+ * contract this object satisfies.
+ *
+ * @param {object} defaults - the schema's default values.
+ * @returns {Function} the callable schema.
+ */
+function makeSchema(defaults) {
+  const schema = function (input) {
+    const source = input !== null && typeof input === 'object' ? input : {}
+    const raw = typeof source.repo === 'string' ? source.repo.trim() : ''
+    return { repo: raw === '' ? defaults.repo : raw }
+  }
+  schema.type = 'object'
+  schema.dict = {}
+  schema.meta = { default: defaults }
+  schema.toJSON = function () {
+    return {
+      type: 'object',
+      properties: { repo: { type: 'string', default: defaults.repo } },
+      default: defaults,
+    }
+  }
+  return schema
+}
 
 /**
  * @param {object} ctx - the guarded Cordis context a host half receives.
@@ -32,6 +61,7 @@ const inject = ['skills', 'timer']
 function apply(ctx) {
   const skills = ctx.skills
   const fs = ctx.get('fs')
+  const settings = ctx.get('settings')
   const off = new Set()
   const meta = new Map()
   let defs = []
@@ -39,8 +69,79 @@ function apply(ctx) {
   let pending
   let poke = function () {}
 
-  const str = function (value) { return typeof value === 'string' ? value : '' }
+  let repo = DEFAULT_REPO
+  let savedTarget
+  let currentTarget
+  const scope = settings === undefined
+    ? undefined
+    : settings.register(SETTINGS_NS, makeSchema({ repo: DEFAULT_REPO }))
 
+  /**
+   * Expand a leading `~`.
+   *
+   * The dynamic sandbox withholds `require`, `process` and `node:os`, so the
+   * home directory cannot be read directly. `directoryPickerController` answers
+   * with it — its listing carries `home` — and that service is the only mounted
+   * seam that reports it.
+   */
+  const home = async function () {
+    const picker = ctx.get('directoryPickerController')
+    if (picker === undefined) return undefined
+    try {
+      const listing = await picker.list(undefined, undefined)
+      return typeof listing.home === 'string' && listing.home !== '' ? listing.home : undefined
+    } catch (error) {
+      return undefined
+    }
+  }
+
+  /** Resolve `~` and `~/…` against the host home directory. */
+  const absolute = async function (path) {
+    const text = typeof path === 'string' ? path.trim() : ''
+    if (text !== '~' && !text.startsWith('~/') && !text.startsWith('~\\')) return text
+    const base = await home()
+    if (base === undefined) {
+      throw new Error('无法解析 ~：directoryPickerController 不可用，请填绝对路径')
+    }
+    if (text === '~') return base
+    const rest = text.slice(2).split(/[\\/]+/).join('\\')
+    return base.replace(/[\\/]+$/, '') + '\\' + rest
+  }
+
+  const readSetting = function () {
+    if (scope === undefined) return DEFAULT_REPO
+    const value = scope.get()
+    if (value === null || typeof value !== 'object') return DEFAULT_REPO
+    const stored = typeof value.repo === 'string' ? value.repo.trim() : ''
+    return stored === '' ? DEFAULT_REPO : stored
+  }
+
+  // The persisted value wins over the constant as soon as the namespace is up.
+  repo = readSetting()
+
+  const persist = async function (next) {
+    if (scope === undefined) throw new Error('the settings service is not mounted, so the repository path cannot be saved')
+    await scope.update({ repo: next })
+  }
+
+  /**
+   * Adopt a repository path and drop everything derived from the previous one:
+   * the parsed definitions, the scan signature and the resolved target.
+   */
+  const adopt = function (next) {
+    const changed = next !== repo
+    repo = next
+    if (!changed) return false
+    defs = []
+    meta.clear()
+    sig = undefined
+    pending = undefined
+    savedTarget = undefined
+    currentTarget = undefined
+    return true
+  }
+
+  const str = function (value) { return typeof value === 'string' ? value : '' }
   const unquote = function (value) {
     const s = str(value).trim()
     if (s.length >= 2) {
@@ -104,9 +205,21 @@ function apply(ctx) {
     }
   }
 
+  /**
+   * Resolve the configured path once per path value. `~` is left to the
+   * filesystem service, which owns home expansion for this deployment.
+   */
+  const target = async function () {
+    if (currentTarget !== undefined && savedTarget === repo) return currentTarget
+    const resolved = await fs.resolve(await absolute(repo))
+    savedTarget = repo
+    currentTarget = resolved
+    return resolved
+  }
+
   const scan = async function () {
     if (fs === undefined) return
-    const root = await fs.resolve(REPO)
+    const root = await target()
     const top = await entries(root)
     const files = []
     const marks = []
@@ -180,6 +293,25 @@ function apply(ctx) {
     }
   }, 'demo restore')
 
+  /**
+   * Follow the settings document rather than only the panel. An edit made in
+   * `settings.yaml` while DSH runs reaches this scope's watcher, which adopts
+   * the new path and republishes the catalog.
+   */
+  if (scope !== undefined && typeof scope.watch === 'function') {
+    ctx.effect(function () {
+      const stop = scope.watch(function () {
+        if (adopt(readSetting())) {
+          kick()
+          ensure()
+        }
+      })
+      return function () {
+        stop()
+      }
+    }, 'demo settings watch')
+  }
+
   if (fs !== undefined) {
     ctx.skills.registerProvider(function (control) {
       poke = function () { control.invalidate() }
@@ -197,7 +329,7 @@ function apply(ctx) {
               provider: 'agents-repo',
               rank: 450,
               locator: def.name,
-              resourceBase: { kind: 'directory', path: REPO },
+              resourceBase: { kind: 'directory', path: repo },
             }
           })
         },
@@ -211,7 +343,7 @@ function apply(ctx) {
             invocation: { modelInvocable: def.modelInvocable, userInvocable: def.userInvocable },
             source: 'user-agents',
             provider: 'agents-repo',
-            resourceBase: { kind: 'directory', path: REPO },
+            resourceBase: { kind: 'directory', path: repo },
             content: def.content,
           }
         },
@@ -271,13 +403,65 @@ function apply(ctx) {
       remember(name, live[i].description, live[i].whenToUse)
     }
     const rows = catalog()
-    return { rows: rows, total: rows.length, offCount: off.size, repo: REPO }
+    return {
+      rows: rows,
+      total: rows.length,
+      offCount: off.size,
+      repo: repo,
+      repoDefault: DEFAULT_REPO,
+      repoStored: repo !== DEFAULT_REPO,
+      repoWritable: scope !== undefined,
+      repoLoaded: defs.length,
+    }
   })
 
   harness.handle('hub:flip', async function (args) {
     const req = args === undefined ? {} : args
     flip(Array.isArray(req.names) ? req.names : [], req.enabled !== false)
     return { ok: true, offCount: off.size }
+  })
+
+  /**
+   * Repoint the repository. The value is validated by resolving it through the
+   * filesystem service first, so a typo is reported instead of being saved and
+   * quietly producing an empty catalog.
+   */
+  harness.handle('hub:repo', async function (args) {
+    const req = args === undefined ? {} : args
+    const wanted = typeof req.repo === 'string' ? req.repo.trim() : ''
+    if (wanted === '') {
+      try {
+        await persist(DEFAULT_REPO)
+      } catch (error) {
+        const message = error !== null && typeof error === 'object' && typeof error.message === 'string'
+          ? error.message
+          : String(error)
+        return { ok: false, repo: repo, error: '保存失败：' + message }
+      }
+      adopt(DEFAULT_REPO)
+      await ensure()
+      return { ok: true, repo: repo, repoStored: false, error: null }
+    }
+    if (fs === undefined) return { ok: false, repo: repo, error: 'filesystem service is not mounted' }
+    try {
+      await fs.resolve(await absolute(wanted))
+    } catch (error) {
+      const message = error !== null && typeof error === 'object' && typeof error.message === 'string'
+        ? error.message
+        : String(error)
+      return { ok: false, repo: repo, error: '路径无法解析：' + message }
+    }
+    try {
+      await persist(wanted)
+    } catch (error) {
+      const message = error !== null && typeof error === 'object' && typeof error.message === 'string'
+        ? error.message
+        : String(error)
+      return { ok: false, repo: repo, error: '保存失败：' + message }
+    }
+    adopt(wanted)
+    await ensure()
+    return { ok: true, repo: repo, repoStored: true, error: null }
   })
 }
 

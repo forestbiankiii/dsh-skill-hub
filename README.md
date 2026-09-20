@@ -132,12 +132,39 @@ node tools/slice-payload.mjs demo --check   # 拼回去必须与载荷逐字节�
 `--check` 保证。
 
 
-### 自定义技能仓库路径
+### 技能仓库路径（可改）
 
-宿主半边顶部的 `SKILL_REPO` 常量就是仓库根目录，默认指向
-`C:\Users\17196\.agents\skills`。改成你自己的路径后重新构建即可；如果该目录同时
-被 DSH 自带的 `skill-filesystem` 作为 `user-agents` 根扫描，本提供方的 rank 450
-低于它的 500，文件系统提供方会胜出，不会产生重名冲突。
+仓库根目录是**用户设置**，不是写死的常量。`deploy/demo` 那一版把它注册成 DSH
+设置里的一个命名空间：
+
+| 项 | 值 |
+| --- | --- |
+| 命名空间 | `skill-hub` |
+| 键 | `repo` |
+| 默认值 | `~/.agents/skills` |
+| 落盘位置 | `$DSH_HOME/settings.yaml`（本机即 `C:\Users\17196\.dsh\settings.yaml`） |
+
+在面板里改地址，会先解析校验、再写进设置文件、然后重新扫描；`~` 开头的路径会被
+展开成宿主的 home。改完在 DSH 重启后依然生效。
+
+```yaml
+# ~/.dsh/settings.yaml
+skill-hub:
+  repo: D:/shared/skills
+```
+
+手改这个文件也能生效：插件通过设置命名空间的 `watch()` 跟随文档变化，不需要重启
+DSH。
+
+`src/` 与 `deploy/compact` 两版仍是常量 `SKILL_REPO`（分别指向这份机器的绝对路径）：
+它们是参考实现，没有接设置服务。
+
+schemastery 在沙箱里够不到（没有 `require`），所以这个 schema 是手搓的：设置服务只
+要求 schema 可调用、带 `toJSON()`、并且用 `type` / `dict` 描述容器形状（供密钥脱敏
+遍历），这三点够了。
+
+如果该目录同时被 DSH 自带的 `skill-filesystem` 当作 `user-agents` 根扫描，本提供方
+的 rank 450 低于它的 500，文件系统提供方会胜出，不产生重名冲突。
 
 ---
 

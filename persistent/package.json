@@ -23,17 +23,19 @@
     "tools",
     "cordis.patch.yml",
     "README.md",
+    "install.ps1",
     "rollback.ps1",
     "smoke-host.mjs",
     "smoke-client.mjs",
-    "verify-install.mjs",
-    "LICENSE"
+    "verify-install.mjs"
   ],
   "scripts": {
     "build": "node tools/build-client.mjs",
     "check": "node --check lib/index.js && node --check smoke-host.mjs && node --check smoke-client.mjs && node --check verify-install.mjs && node tools/build-client.mjs --check",
     "smoke": "node smoke-host.mjs && node smoke-client.mjs",
     "verify": "node verify-install.mjs",
+    "install:dsh": "pwsh -NoLogo -NoProfile -File install.ps1",
+    "uninstall:dsh": "pwsh -NoLogo -NoProfile -File rollback.ps1",
     "preflight": "npm run check && npm run smoke && npm run verify"
   },
   "dsh": {

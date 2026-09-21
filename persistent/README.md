@@ -26,12 +26,17 @@ persistent/
 ├── smoke-host.mjs            # 桩 ctx 真跑 apply；含一次真实 RPC 信封往返
 ├── smoke-client.mjs          # 假 ModuleLoader + 假 React 渲染一次面板
 ├── verify-install.mjs        # 不重启即可检查 profile 集成是否自洽
+├── install.ps1               # 装进 profile：改 manifest + pnpm + 立刻验证
 └── rollback.ps1              # 卸载
 ```
 
 ## 安装
 
-三处改动，都在 profile 里：
+```powershell
+pwsh -NoLogo -NoProfile -File install.ps1
+```
+
+脚本做的事只有三件，都在 profile 里：
 
 ```jsonc
 // ~/.dsh/profiles/desktop/package.json
@@ -44,13 +49,19 @@ persistent/
 ```
 
 ```powershell
-# ~/.dsh/profiles/desktop 下
-pnpm install --frozen-lockfile
+# 3. pnpm install（脚本自己做，也会自己找 Desktop 自带的那个 pnpm）
 ```
 
-**就这两处。** loader 行本身由本目录自带的 `cordis.patch.yml` 通过 `dsh.bundle.patch`
+可选参数：`-Source <插件目录>`、`-Profile <profile 目录>`、`-Dependency <file: 规格>`、
+`-SkipInstall`（只改 manifest，不跑 pnpm）。
+
+**loader 行不在这三件事里**：它由本目录自带的 `cordis.patch.yml` 通过 `dsh.bundle.patch`
 声明；浏览器半边由 `dsh.client` + `exports["./client"]` 声明，`dsh-client-modules` 扫到
-后把它并进启动图。
+后把它并进启动图。脚本是幂等的，重复跑不会重复写；跑完会立刻调用
+`verify-install.mjs`，不通过就以非零码退出，并明确告诉你**先别重启**。
+
+如果用户补丁层里已经有一行 `skill-hub`，脚本会**拒绝安装**并打印那段要删的内容——带着
+这一行装完，DSH 是起不来的。
 
 ### 不要在 profile 的 cordis.patch.yml 里再写一行
 

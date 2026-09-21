@@ -2,7 +2,7 @@
   "name": "dsh-skill-hub",
   "version": "0.1.0",
   "private": true,
-  "description": "DSH dynamic Cordis plugin: list every resolved skill in Settings, toggle each one on or off, and read the shared ~/.agents/skills repository live.",
+  "description": "DSH dynamic Cordis plugin: list every resolved skill in Settings, toggle each one on or off, and read the shared ~/.agents/skills repository live. Also ships the same thing as a persistent profile plugin under persistent/.",
   "type": "module",
   "license": "MIT",
   "author": "forestbiankiii",
@@ -19,7 +19,9 @@
     "test": "node tools/build-payload.mjs --check && node tools/verify-payload.mjs && node tools/slice-payload.mjs demo --check",
     "payload": "node tools/build-payload.mjs --write && node tools/slice-payload.mjs demo",
     "payload:compact": "node tools/build-payload.mjs --compact --json",
-    "payload:demo": "node tools/build-payload.mjs --demo --json"
+    "payload:demo": "node tools/build-payload.mjs --demo --json",
+    "check:persistent": "npm --prefix persistent run check",
+    "test:persistent": "npm --prefix persistent run preflight"
   },
   "engines": {
     "node": ">=20"

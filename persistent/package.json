@@ -1,0 +1,61 @@
+{
+  "name": "dsh-skill-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH plugin: publishes the shared ~/.agents/skills repository to every agent and enforces per-workspace skill switches.",
+  "license": "MIT",
+  "author": "forestbiankiii",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "tools",
+    "cordis.patch.yml",
+    "README.md",
+    "rollback.ps1",
+    "smoke-host.mjs",
+    "smoke-client.mjs",
+    "verify-install.mjs",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node tools/build-client.mjs",
+    "check": "node --check lib/index.js && node --check smoke-host.mjs && node --check smoke-client.mjs && node --check verify-install.mjs && node tools/build-client.mjs --check",
+    "smoke": "node smoke-host.mjs && node smoke-client.mjs",
+    "verify": "node verify-install.mjs",
+    "preflight": "npm run check && npm run smoke && npm run verify"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,5 @@
+# Skill Hub — publish the shared ~/.agents/skills repository to every agent, and
+# enforce the per-workspace switches the panel writes into settings.yaml.
+- insert:
+    - id: skill-hub
+      name: 'dsh-skill-hub'

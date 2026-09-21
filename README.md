@@ -9,6 +9,11 @@ the DeepSeek Harness (DSH): it lists every resolved skill in the Settings panel,
 toggles each one on or off, and makes the shared `~/.agents/skills` repository
 live for the running session without a restart.
 
+> **两种形态 / two forms.** 本目录（`src/` `deploy/` `payload/`）是**动态 Cordis Package**
+> 形态：代码由 `cordis_define` 定义、`cordis_run` 激活，活在当前进程里。同一件事还有
+> **常驻插件**形态，见 [`persistent/`](persistent/README.md)：装在 profile 里、文件就是
+> 插件本体、两半边都随 DSH 启动，代价是要重启才生效。
+
 ---
 
 ## 功能 / What it does
@@ -57,6 +62,12 @@ dsh-skill-hub/
 │   ├── compact.host.txt        # 紧凑版宿主载荷 ← 实际部署用的就是它
 │   ├── compact.client.txt
 │   └── compact.json
+├── persistent/                 # 常驻插件形态：同一件事，装在 profile 里
+│   ├── lib/index.js            # 宿主半边（node:fs + /api 路由）
+│   ├── src/client.js           # 浏览器半边源码
+│   ├── lib/client.js           # 浏览器半边产物
+│   ├── verify-install.mjs      # 重启前的 profile 集成守卫
+│   └── README.md               # 安装形态、RPC 信封、硬链接语义、卸载
 ├── LICENSE
 └── README.md
 ```

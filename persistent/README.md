@@ -119,8 +119,9 @@ src/client.js  --(node tools/build-client.mjs)-->  lib/client.js
 - **先写临时文件再 rename 的编辑器**会静默断开硬链接，源码新、profile 旧——删掉
   `node_modules/dsh-skill-hub` 再 `pnpm install` 即可。
 
-`verify-install.mjs` 逐字节比对 `package.json`、`cordis.patch.yml`、`lib/index.js`、
-`lib/client.js`，就是为了戳穿最后那种状态。
+`verify-install.mjs` 会遍历包里**每一个**源文件逐字节比对，就是为了戳穿前两种状态：
+「新文件没进 profile」和「硬链接被悄悄换掉」。只检查运行时会加载的那几个文件是不够的
+——半截分叉的副本，是下一次重启最容易被它绊倒的地方。
 
 ## 验证
 

@@ -197,23 +197,49 @@ if (clientBundle !== undefined) {
 /*
  * pnpm imports a `file:` dependency as a HARD-LINK FARM: the profile's copy is
  * the same inode as the source file, so an in-place rewrite (node's writeFile,
- * which truncates) reaches the profile by itself. The trap is the reverse — any
- * tool that writes a temp file and renames it breaks the link silently, leaving
- * the profile on the old bytes while the source looks correct. Comparing bytes
- * catches exactly that, for the files the host actually loads.
+ * which truncates) reaches the profile by itself. The trap is the reverse — a
+ * NEW file is not in the profile at all, and any tool that writes a temp file
+ * and renames it breaks the link silently, leaving the profile on the old bytes
+ * while the source looks correct. So every source file is compared, not just the
+ * ones the host loads: a half-forked copy is how the next restart surprises you.
  */
 console.log('the profile copy is still the source, not a stale fork')
-for (const relative of ['package.json', 'cordis.patch.yml', join('lib', 'index.js'), join('lib', 'client.js')]) {
+const sourceFiles = []
+const walk = async (relative) => {
+  let entries
+  try {
+    entries = await readdir(join(pluginDir, relative), { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.name === 'node_modules' || entry.name === '.git') continue
+    const next = relative === '' ? entry.name : join(relative, entry.name)
+    if (entry.isDirectory()) await walk(next)
+    else if (entry.isFile()) sourceFiles.push(next)
+  }
+}
+await walk('')
+
+let drifted = []
+for (const relative of sourceFiles) {
   const source = await readText(join(pluginDir, relative))
   const installedCopy = await readText(join(installed, relative))
+  if (source === installedCopy) continue
+  drifted.push(relative)
   check(
     `profile copy of ${relative} matches the source`,
-    source !== undefined && source === installedCopy,
-    source === undefined
-      ? `${relative} is missing from ${pluginDir}`
+    false,
+    installedCopy === undefined
+      ? 'new file — delete the installed directory and re-run pnpm install in the profile'
       : 'the hard link was replaced — delete the installed directory and re-run pnpm install in the profile',
   )
 }
+check(
+  `all ${sourceFiles.length} source file(s) are intact in the profile`,
+  drifted.length === 0,
+  drifted.length === 0 ? undefined : `drifted: ${drifted.join(', ')}`,
+)
 
 /* -------------------------------------------------------------- the row shape */
 

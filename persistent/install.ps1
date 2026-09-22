@@ -164,24 +164,47 @@ if ($SkipInstall) {
     }
   }
   if (-not $pnpm) {
-    Write-Host 'pnpm not found; install the dependency yourself:' -ForegroundColor Yellow
-    Write-Host "  cd `"$Profile`"; pnpm install"
-  } else {
-    Write-Host "using $pnpm"
-    # pnpm considers a file: dependency satisfied once the directory exists, so a
-    # refresh needs the old copy gone: hard links survive edits, but a stale fork
-    # does not fix itself.
-    if (Test-Path -LiteralPath $linked) {
-      Remove-Item -LiteralPath $linked -Recurse -Force
-    }
-    Push-Location $Profile
-    try {
-      & $pnpm install --frozen-lockfile --prefer-offline
-      if ($LASTEXITCODE -ne 0) { Write-Host "pnpm exited $LASTEXITCODE" -ForegroundColor Yellow }
-    } finally {
-      Pop-Location
-    }
+    throw 'pnpm not found on PATH or under DSH Desktop\runtime-commands'
   }
+
+  Write-Host "using $pnpm"
+  Push-Location $Profile
+  try {
+    # The profile manifest may legitimately have changed since its last install;
+    # do not delete a working plugin and then let --frozen-lockfile strand it.
+    & $pnpm install --no-frozen-lockfile --prefer-offline
+    if ($LASTEXITCODE -ne 0) { throw "pnpm install exited $LASTEXITCODE" }
+  } finally {
+    Pop-Location
+  }
+
+  if (-not (Test-Path -LiteralPath $linked)) {
+    throw "pnpm finished but did not create $linked"
+  }
+
+  # A file: dependency is normally a hard-link farm. Editors that replace files
+  # and source files added after the install can still drift, so refresh ONLY
+  # missing/different files. Equal hard links are left alone — copying one onto
+  # its other name would truncate the source as well.
+  $sourceRoot = (Resolve-Path -LiteralPath $Source).Path.TrimEnd('\')
+  $copied = 0
+  Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
+    Where-Object { $_.FullName -notmatch '[\\/](node_modules|\.git)[\\/]' } |
+    ForEach-Object {
+      $relative = $_.FullName.Substring($sourceRoot.Length + 1)
+      $target = Join-Path $linked $relative
+      $same = Test-Path -LiteralPath $target
+      if ($same) {
+        $same = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -eq
+          (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+      }
+      if (-not $same) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+        Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+        $copied += 1
+      }
+    }
+  Write-Host "refreshed $copied changed plugin file(s)"
 }
 
 # ------------------------------------------------------------------- verify now

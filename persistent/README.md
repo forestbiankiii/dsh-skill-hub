@@ -127,8 +127,9 @@ src/client.js  --(node tools/build-client.mjs)-->  lib/client.js
 
 - **原地重写**（`writeFile` 即截断同一 inode）直接生效；
 - **新增文件**不会凭空出现在 profile 里，要重装；
-- **先写临时文件再 rename 的编辑器**会静默断开硬链接，源码新、profile 旧——删掉
-  `node_modules/dsh-skill-hub` 再 `pnpm install` 即可。
+- **先写临时文件再 rename 的编辑器**会静默断开硬链接，源码新、profile 旧——重新跑
+  `install.ps1` 即可：它先让 pnpm 收敛 profile 依赖，再只复制缺失或字节不同的插件文件；
+  相同硬链接不碰，也不会先删掉一个还能工作的安装。
 
 `verify-install.mjs` 会遍历包里**每一个**源文件逐字节比对，就是为了戳穿前两种状态：
 「新文件没进 profile」和「硬链接被悄悄换掉」。只检查运行时会加载的那几个文件是不够的

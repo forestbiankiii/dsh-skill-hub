@@ -179,7 +179,15 @@ if (registered !== undefined) {
       check('stylesheet is tagged with the package name', tag.dataset.plugin === 'dsh-skill-hub', String(tag.dataset.plugin))
       check('stylesheet has content', typeof tag.textContent === 'string' && tag.textContent.length > 100)
       check('stylesheet uses the shipped font token', tag.textContent.includes('--dsw-font-family'))
+      check(
+        'repository links have the light-blue GitHub treatment',
+        tag.textContent.includes('.hub-github-icon') && tag.textContent.includes('#79c0ff'),
+      )
     }
+    check(
+      'bundle renders a native external GitHub link',
+      bundle.includes("createElement('a'") && bundle.includes('hub-github-icon') && bundle.includes('noreferrer noopener'),
+    )
 
     // 2. Render the registered section once, the way the settings shell will,
     //    and confirm the first data call goes through the authenticated bridge.

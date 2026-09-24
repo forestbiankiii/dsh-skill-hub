@@ -35,7 +35,7 @@ const css = [
   '.hub-btn{padding:5px 12px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1,#444);background:var(--dsw-alias-bg-layer-1,#2b2b2b);color:var(--dsw-alias-label-primary,#fff);font-family:inherit;font-size:12px;cursor:pointer;transition:background 0.15s,border-color 0.15s}',
   '.hub-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2,#383838);border-color:var(--dsw-alias-border-l2,#666)}',
   '.hub-btn:disabled{opacity:0.5;cursor:default}',
-  '.hub-link{display:inline-flex;align-items:center;gap:5px;max-width:min(250px,36vw);padding:4px 7px;border-radius:6px;color:#79c0ff;font-family:var(--ds-font-family-code,monospace);font-size:11px;line-height:1;text-decoration:none;transition:color 0.15s,background 0.15s;outline:none}',
+  '.hub .hub-link{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;padding:2px 0;border-radius:4px;color:#79c0ff;font-family:inherit;font-size:12px;line-height:1.5;text-decoration:none;outline:none}',
   '.hub-link-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}',
   '.hub-github-icon{width:14px;height:14px;flex:none;fill:currentColor}',
   '.hub-link:hover{color:#a5d6ff;background:rgba(121,192,255,0.12)}',
@@ -45,23 +45,37 @@ const css = [
   '.hub-search{flex:1;min-width:140px;padding:6px 10px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1,#444);background:var(--dsw-alias-bg-layer-2,#222);color:var(--dsw-alias-label-primary,#fff);font-family:inherit;font-size:12px;outline:none;transition:border-color 0.15s}',
   '.hub-search:hover{border-color:var(--dsw-alias-border-l2,#666)}',
   '.hub-search:focus{border-color:var(--dsw-alias-brand-primary,#0a84ff)}',
-  '.hub-list{display:flex;flex-direction:column;gap:10px}',
-  '.hub-group{border:1px solid var(--dsw-alias-border-l1,#333);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#1e1e1e);overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,0.12);transition:border-color 0.15s,background 0.15s}',
-  '.hub-group:hover{border-color:var(--dsw-alias-border-l2,#4b5563);background:var(--dsw-alias-bg-layer-2,#222)}',
-  '.hub-head{display:flex;align-items:center;gap:10px;min-height:38px;padding:9px 12px}',
-  '.hub-head-open{background:var(--dsw-alias-bg-layer-2,#242426);border-bottom:1px solid var(--dsw-alias-border-l1,#333)}',
-  '.hub-caret{width:14px;flex:none;border:0;background:none;color:var(--dsw-alias-label-secondary,#aaa);font-family:inherit;font-size:11px;cursor:pointer;padding:0;transition:color 0.15s}',
-  '.hub-caret:hover{color:var(--dsw-alias-label-primary,#fff)}',
-  '.hub-series{font-family:var(--ds-font-family-code,monospace);font-size:13px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}',
+  '.hub-list{display:flex;flex-direction:column;gap:12px;min-width:0}',
+  '.hub-group{min-width:0;border:1px solid var(--dsw-alias-border-l1,#383838);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#242424);overflow:hidden}',
+  '.hub-group:hover{border-color:var(--dsw-alias-border-l2,#505050)}',
+  '.hub-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:16px;row-gap:8px;padding:16px 18px}',
+  '.hub-head-open{border-bottom:1px solid var(--dsw-alias-border-l1,#383838)}',
+  '.hub .hub-series{margin:0;min-width:0;font-family:inherit;font-size:14px;font-weight:600;line-height:1.5;overflow-wrap:anywhere;color:inherit}',
+  '.hub .hub-disclosure{display:flex;align-items:center;gap:8px;text-align:left;padding:0;border:0;border-radius:4px;background:none;cursor:pointer}',
+  '.hub-disclosure:hover .hub-series-label{text-decoration:underline;text-underline-offset:3px}',
+  '.hub-chevron{flex:none;font-size:12px;color:var(--dsw-alias-label-tertiary,#999)}',
+  '.hub-series-label{min-width:0;overflow-wrap:anywhere}',
+  '.hub-meta{grid-column:1/-1;display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;min-width:0}',
+  '.hub-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary,#999);white-space:nowrap}',
+  '.hub-status-dot{width:5px;height:5px;border-radius:50%;background:currentColor}',
+  '.hub-status-on .hub-status-dot{background:var(--dsw-alias-state-success-primary,#58bc69)}',
+  '.hub-single-body{padding:0 18px 16px}',
+  '.hub .hub-description{margin:0;min-width:0;font-size:13px;line-height:1.65;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary,#c0c0c0)}',
+  '.hub .hub-description summary{list-style:none;cursor:pointer;border-radius:4px}',
+  '.hub-description summary::-webkit-details-marker{display:none}',
+  '.hub-description:not([open]) .hub-description-text{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}',
+  '.hub-description-hint{display:block;margin-top:6px;font-size:11px;color:var(--dsw-alias-label-tertiary,#999)}',
+  '.hub-description[open] .hub-more,.hub-description:not([open]) .hub-less{display:none}',
+  '.hub :is(.hub-disclosure,.hub-sw,.hub-description summary):focus-visible{outline:2px solid #79c0ff;outline-offset:3px}',
   '.hub-tag{font-size:10px;padding:1px 6px;border-radius:4px;border:1px solid var(--dsw-alias-border-l1,#444);color:var(--dsw-alias-label-secondary,#aaa);white-space:nowrap}',
   '.hub-tag-on{color:var(--dsw-alias-state-success-primary,#22c55e);border-color:var(--dsw-alias-state-success-primary,#22c55e)}',
   '.hub-grow{flex:1;min-width:0}',
   '.hub-items{display:flex;flex-direction:column}',
-  '.hub-item{padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1,#2a2a2a)}',
+  '.hub-item{padding:14px 18px;border-top:1px solid var(--dsw-alias-border-l1,#333)}',
   '.hub-item:first-child{border-top:0}',
-  '.hub-down{opacity:0.55}',
-  '.hub-row{display:flex;align-items:center;gap:8px}',
-  '.hub-name{font-family:var(--ds-font-family-code,monospace);font-weight:600}',
+  '.hub-down .hub-name{color:var(--dsw-alias-label-tertiary,#999)}',
+  '.hub-row{display:flex;align-items:center;gap:12px;margin-bottom:8px;min-width:0}',
+  '.hub-name{min-width:0;overflow-wrap:anywhere;font-family:inherit;font-size:13px;font-weight:600}',
   '.hub-desc{margin-top:5px;font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary,#ccc)}',
   '.hub-note{margin-top:4px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary,#999);word-break:break-word}',
   '.hub-warn{color:var(--dsw-alias-state-warn-primary,#f59e0b)}',
@@ -108,6 +122,20 @@ function Btn(props) {
     disabled: props.disabled === true,
     onClick: props.onClick,
   }, props.text)
+}
+
+/** Native disclosure keeps long descriptions readable without hiding the full text. */
+function SkillDescription(props) {
+  const text = String(props.text || '').trim()
+  if (!text) return null
+  if (text.length <= 180) return createElement('p', { className: 'hub-description' }, text)
+  return createElement('details', { className: 'hub-description' },
+    createElement('summary', null,
+      createElement('span', { className: 'hub-description-text' }, text),
+      createElement('span', { className: 'hub-description-hint hub-more' }, '展开说明 ↓'),
+      createElement('span', { className: 'hub-description-hint hub-less' }, '收起说明 ↑'),
+    ),
+  )
 }
 
 /* -------------------------------------------------------------------- pages */
@@ -230,31 +258,7 @@ function PageSkills(props) {
         const expanded = single ? true : open[group.key] === true
         const onCount = group.skills.filter(function (skill) { return skill.enabled }).length
 
-        const head = createElement('div', {
-          className: 'hub-head' + (expanded && !single ? ' hub-head-open' : ''),
-          key: 'head',
-        },
-          single
-            ? null
-            : createElement('button', {
-              type: 'button',
-              className: 'hub-caret',
-              'aria-expanded': expanded,
-              onClick: function () {
-                setOpen(function (prev) {
-                  const next = Object.assign({}, prev)
-                  next[group.key] = !(prev[group.key] === true)
-                  return next
-                })
-              },
-            }, expanded ? '▾' : '▸'),
-          createElement('span', { className: 'hub-series' }, group.series),
-          single ? null : createElement('span', { className: 'hub-tag' }, group.skills.length + ' 个'),
-          createElement('span', {
-            className: 'hub-tag' + (onCount === group.skills.length ? ' hub-tag-on' : ''),
-          }, '开启 ' + onCount + '/' + group.skills.length),
-          createElement('span', { className: 'hub-grow' }),
-          group.url !== ''
+        const repositoryLink = group.url !== ''
             ? createElement('a', {
               className: 'hub-link',
               href: group.url,
@@ -272,39 +276,57 @@ function PageSkills(props) {
                 d: 'M12 2C6.477 2 2 6.484 2 12.017c0 4.426 2.865 8.18 6.839 9.504.5.093.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.071 1.531 1.03 1.531 1.03.892 1.53 2.341 1.088 2.91.832.091-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.987 1.03-2.687-.103-.253-.447-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.56 9.56 0 0 1 12 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.594 1.028 2.687 0 3.848-2.337 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0 0 22 12.017C22 6.484 17.522 2 12 2Z',
               })),
             )
-            : null,
+            : null
+
+        const head = createElement('div', {
+          className: 'hub-head' + (expanded && !single ? ' hub-head-open' : ''),
+          key: 'head',
+        },
           single
-            ? createElement(Sw, {
-              on: group.skills[0].enabled,
-              label: group.skills[0].name,
-              flip: function (next) { send([group.skills[0].name], next) },
-            })
-            : createElement(Sw, {
-              on: onCount === group.skills.length,
-              label: group.series,
-              flip: function (next) { send(group.skills.map(function (skill) { return skill.name }), next) },
-            }),
+            ? createElement('div', { className: 'hub-series' }, group.skills[0].name)
+            : createElement('button', {
+              type: 'button',
+              className: 'hub-series hub-disclosure',
+              'aria-expanded': expanded,
+              onClick: function () {
+                setOpen(function (prev) {
+                  return Object.assign({}, prev, { [group.key]: !prev[group.key] })
+                })
+              },
+            },
+              createElement('span', { className: 'hub-chevron', 'aria-hidden': true }, expanded ? '▾' : '▸'),
+              createElement('span', { className: 'hub-series-label' }, group.series),
+            ),
+          createElement(Sw, {
+            on: onCount === group.skills.length,
+            label: single ? group.skills[0].name : group.series + ' 系列全部技能',
+            flip: function (next) { send(group.skills.map(function (skill) { return skill.name }), next) },
+          }),
+          createElement('div', { className: 'hub-meta' },
+            createElement('span', {
+              className: 'hub-status' + (onCount > 0 ? ' hub-status-on' : ''),
+            },
+              createElement('span', { className: 'hub-status-dot', 'aria-hidden': true }),
+              single ? (onCount ? '已开启' : '已关闭') : group.skills.length + ' 个技能 · 已开启 ' + onCount + ' 个',
+            ),
+            repositoryLink || createElement('span', { className: 'hub-status' }, group.note || '本地技能'),
+          ),
         )
 
         const body = []
-        if (single && group.note !== '') {
-          body.push(createElement('div', { className: 'hub-note', key: 'note' }, group.note))
-        }
         if (single) {
-          body.push(createElement('div', { className: 'hub-desc', key: 'desc' }, group.skills[0].description))
-          if (group.skills[0].whenToUse !== '') {
-            body.push(createElement('div', { className: 'hub-note', key: 'when' },
-              '适用场景：' + group.skills[0].whenToUse))
-          }
+          body.push(createElement('div', { className: 'hub-single-body', key: 'description' },
+            createElement(SkillDescription, { text: group.skills[0].description }),
+            group.skills[0].whenToUse !== ''
+              ? createElement('div', { className: 'hub-note' }, '适用场景：' + group.skills[0].whenToUse)
+              : null,
+          ))
         } else if (expanded) {
           body.push(createElement('div', { className: 'hub-items', key: 'items' },
             group.skills.map(function (skill) {
               const box = [
                 createElement('div', { className: 'hub-row', key: 'head' },
                   createElement('span', { className: 'hub-name' }, skill.name),
-                  createElement('span', {
-                    className: 'hub-tag' + (skill.enabled ? ' hub-tag-on' : ''),
-                  }, skill.enabled ? '已开启' : '已关闭'),
                   createElement('span', { className: 'hub-grow' }),
                   createElement(Sw, {
                     on: skill.enabled,
@@ -312,7 +334,7 @@ function PageSkills(props) {
                     flip: function (next) { send([skill.name], next) },
                   }),
                 ),
-                createElement('div', { className: 'hub-desc', key: 'desc' }, skill.description),
+                createElement(SkillDescription, { key: 'desc', text: skill.description }),
               ]
               if (skill.whenToUse !== '') {
                 box.push(createElement('div', { className: 'hub-note', key: 'when' },

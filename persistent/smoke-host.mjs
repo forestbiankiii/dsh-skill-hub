@@ -9,8 +9,6 @@
  * Usage: node smoke-host.mjs
  */
 
-import { pathToFileURL } from 'node:url'
-
 let failures = 0
 function check(label, condition, detail) {
   if (condition) {
@@ -21,9 +19,13 @@ function check(label, condition, detail) {
   console.log(`  FAIL ${label}${detail === undefined ? '' : ` — ${detail}`}`)
 }
 
-const mod = await import(
-  pathToFileURL('C:/Users/17196/.dsh/local-plugins/dsh-skill-hub/lib/index.js').href
-)
+const mod = await import('./lib/index.js')
+
+const literal = mod.parseFrontmatter('---\nname: example\ndescription: |\n  First line.\n  Second line.\nlicense: MIT\n---\n# Content')
+check('literal descriptions are text, not a pipe', literal?.data.description === 'First line.\nSecond line.\n')
+check('block descriptions preserve subsequent fields and body', literal?.data.license === 'MIT' && literal?.body === '# Content')
+const folded = mod.parseFrontmatter('---\r\nname: example\r\ndescription: >-\r\n  First line.\r\n  Second line.\r\n---\r\nBody')
+check('folded descriptions handle CRLF and strip chomping', folded?.data.description === 'First line. Second line.')
 
 /* ------------------------------------------------------------------- stubs */
 

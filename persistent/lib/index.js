@@ -142,8 +142,8 @@ function readSection(text) {
   return out
 }
 
-/** Parse the flat `key: value` frontmatter a SKILL.md carries. */
-function parseFrontmatter(raw) {
+/** Read top-level skill fields, including literal/folded multiline descriptions. */
+export function parseFrontmatter(raw) {
   let text = raw
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
   if (text.slice(0, 3) !== '---') return null
@@ -153,8 +153,8 @@ function parseFrontmatter(raw) {
   const data = {}
   const body = []
   let closed = false
-  for (const line of lines) {
-    const bare = line.replace(/\r$/, '')
+  for (let i = 0; i < lines.length; i += 1) {
+    const bare = lines[i].replace(/\r$/, '')
     if (closed) {
       body.push(bare)
       continue
@@ -168,7 +168,26 @@ function parseFrontmatter(raw) {
     if (colon <= 0) continue
     const key = bare.slice(0, colon).trim()
     const value = bare.slice(colon + 1).trim()
-    if (key !== '' && value !== '') data[key] = value
+    const block = /^([|>])([+-]?)(?:\s+#.*)?$/.exec(value)
+    if (block) {
+      const content = []
+      while (i + 1 < lines.length) {
+        const next = lines[i + 1].replace(/\r$/, '')
+        if (next.trim() !== '' && !/^\s/.test(next)) break
+        content.push(next)
+        i += 1
+      }
+      const indent = content.find((line) => line.trim() !== '')?.match(/^\s*/)[0].length ?? 0
+      const stripped = content.map((line) => line.slice(indent))
+      // This parser handles the top-level scalar subset, not arbitrary YAML.
+      let text = stripped.map((line, index) => {
+        const next = stripped[index + 1]
+        const fold = block[1] === '>' && line !== '' && next && !/^\s/.test(line) && !/^\s/.test(next)
+        return line + (fold ? ' ' : '\n')
+      }).join('')
+      if (block[2] !== '+') text = text.replace(/\n+$/, '') + (block[2] === '-' ? '' : '\n')
+      data[key] = text
+    } else if (key !== '' && value !== '') data[key] = value
   }
   if (!closed) return null
   return { data, body: body.join('\n') }

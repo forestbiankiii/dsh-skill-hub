@@ -95,6 +95,54 @@ const css = [
   '.hub-sw-on .hub-knob{transform:translateX(16px)}',
   '.hub-card{border:1px solid var(--dsw-alias-border-l1,#333);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#1e1e1e);padding:12px;margin-bottom:8px}',
   '.hub-card-title{font-weight:600;margin-bottom:8px}',
+  `:root {
+  --acc-expand: 250ms;
+  --acc-collapse: 250ms;
+  --acc-chevron: 250ms;
+  --acc-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.t-acc-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open="true"] .t-acc-panel {
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--acc-expand) var(--acc-ease);
+}
+.t-acc-panel-inner {
+  overflow: hidden;
+  opacity: 0;
+  filter: blur(2px);
+  transition:
+    opacity var(--acc-collapse) var(--acc-ease),
+    filter var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open="true"] .t-acc-panel-inner {
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    opacity var(--acc-expand) var(--acc-ease),
+    filter var(--acc-expand) var(--acc-ease);
+}
+.t-acc-chevron {
+  display: inline-flex;
+  transform: scaleY(1);
+  transform-origin: center;
+  transition: transform var(--acc-chevron) var(--acc-ease);
+}
+.t-acc-chevron path { vector-effect: non-scaling-stroke; }
+.t-acc[data-open="true"] .t-acc-chevron {
+  transform: scaleY(-1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-acc-panel, .t-acc-panel-inner, .t-acc-chevron {
+    transition: none !important;
+  }
+}`,
+  // Intrinsic-height interpolation progressively enhances the native disclosure.
+  '@supports (interpolate-size:allow-keywords){.hub-description{interpolate-size:allow-keywords}.hub-description .hub-description-text{display:block;height:auto;overflow:hidden;transition:height var(--acc-expand) var(--acc-ease)}.hub-description:not([open]) .hub-description-text{display:block;height:4.95em;-webkit-line-clamp:unset}}',
+  '@media(prefers-reduced-motion:reduce){.hub-description .hub-description-text{transition:none!important}}',
 ].join('\n')
 
 /** Bound in {@link apply}; every page reads it through {@link call}. */
@@ -302,7 +350,11 @@ function PageSkills(props) {
                 })
               },
             },
-              createElement('span', { className: 'hub-chevron', 'aria-hidden': true }, expanded ? '▾' : '▸'),
+              createElement('span', { className: 'hub-chevron t-acc-chevron', 'aria-hidden': true },
+                createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 },
+                  createElement('path', { d: 'M4 6.5L8 10.5L12 6.5' }),
+                ),
+              ),
               createElement('span', { className: 'hub-series-label' }, group.series),
             ),
           createElement(Sw, {
@@ -329,8 +381,12 @@ function PageSkills(props) {
               ? createElement('div', { className: 'hub-note' }, '适用场景：' + group.skills[0].whenToUse)
               : null,
           ))
-        } else if (expanded) {
-          body.push(createElement('div', { className: 'hub-items', key: 'items' },
+        } else {
+          // Keep the track mounted for both directions; inert removes closed
+          // controls from keyboard navigation without cancelling the animation.
+          body.push(createElement('div', { className: 't-acc-panel', key: 'items', inert: expanded ? undefined : '', 'aria-hidden': !expanded },
+            createElement('div', { className: 't-acc-panel-inner' },
+              createElement('div', { className: 'hub-items' },
             group.skills.map(function (skill) {
               const box = [
                 createElement('div', { className: 'hub-row', key: 'head' },
@@ -356,10 +412,10 @@ function PageSkills(props) {
                 key: skill.name,
               }, box)
             }),
-          ))
+          ))))
         }
 
-        return createElement('div', { className: 'hub-group', key: group.key }, [head].concat(body))
+        return createElement('div', { className: 'hub-group' + (single ? '' : ' t-acc'), key: group.key, 'data-open': single ? undefined : String(expanded) }, [head].concat(body))
       }),
   ))
 

@@ -280,9 +280,15 @@ check('every header keeps title and switch separate from metadata', all.filter((
 check('single descriptions have a shared padded container', all.filter((node) => hasClass(node, 'hub-single-body')).length === 4)
 check('long description has a native expand/collapse control', all.some((node) => node.type === 'details'))
 check('repo links live in metadata and retain an accessible icon', all.filter((node) => hasClass(node, 'hub-meta')).every((meta) => nodes(meta).filter((node) => node.type === 'a').every((a) => a.props.target === '_blank' && nodes(a).some((n) => n.type === 'svg'))))
+const closedPanel = all.find((node) => hasClass(node, 't-acc-panel'))
+check('collapsed panel stays mounted but is inert and hidden from accessibility', closedPanel?.props.inert === '' && closedPanel?.props['aria-hidden'] === true && nodes(closedPanel).filter((node) => hasClass(node, 'hub-item')).length === 2)
+check('collapsed series exposes the animation state', all.some((node) => hasClass(node, 't-acc') && node.props['data-open'] === 'false'))
 expanded = true
 const openTree = renderList()
-check('expanded series renders each skill with its own switch and description', nodes(openTree).filter((node) => hasClass(node, 'hub-item')).length === 2)
+const opened = nodes(openTree)
+check('expanded series renders each skill with its own switch and description', opened.filter((node) => hasClass(node, 'hub-item')).length === 2)
+check('expanded panel restores interaction', opened.find((node) => hasClass(node, 't-acc-panel'))?.props.inert === undefined && opened.some((node) => hasClass(node, 't-acc') && node.props['data-open'] === 'true'))
+check('animation includes reduced-motion guard and intrinsic description height', page.css.includes('prefers-reduced-motion: reduce') && page.css.includes('interpolate-size:allow-keywords') && page.css.includes('grid-template-rows: 0fr'))
 
 const preview = process.argv.indexOf('--preview')
 if (preview !== -1) {
